@@ -102,6 +102,7 @@
 | workflow 硬编码 `marketing_version=1.0.1`，上传到已关闭的版本列车 | 同一 [b1d136e7](https://github.com/heypandax/pairlet/commit/b1d136e7fbd00c42fbd94b658afe1bca8d7518cf)记录两次真实失败 | 默认读取仓库锁步版本；显式 override 前核实目标列车；只有上传新二进制才需要新 build 号 |
 | XcodeGen 意外生成 universal 包，iPad 方向声明却只有竖屏 | [ecf881ff](https://github.com/heypandax/pairlet/commit/ecf881ffc339fa2f9b6b0c1631de253b08a8b09b)，2026-06-22 | 当时用 iPhone-only 修复；当前已正式支持 iPad，不能照抄旧修复。核对 [project.yml](../iosApp/project.yml)、[Info.plist](../iosApp/iosApp/Info.plist)与最终归档，并准备 iPad 素材 |
 | 1.9.5 被拒提交仍持有版本，却另建空审核草稿 | [e0eb466c](https://github.com/heypandax/pairlet/commit/e0eb466c5259e73501ecd55edaa31fb1d776b2be)，2026-09-01 的临时修复 | 先查版本归属与原 submission，再选择合适的复提方式。不要执行历史临时工作流；当前同名 asc-maintenance 已用于证书维护 |
+| 2.6.0（71）审核备注为 4,386 字符，超出 4,000 上限 | [提审任务](https://github.com/heypandax/pairlet/actions/runs/39059676082)在 build 已为 VALID 后返回 `Review Notes cannot be longer than 4000 characters`；原本地校验只覆盖分语言文案 | 审核备注压缩为 3,431 字符，保留审核入口和数据披露；`check-appstore-content.py` 同时校验非空与长度，CI 覆盖 4,000／4,001 边界。仅修元数据时通过 `ios-submit-existing.yml` 复用已上传 build，不重建 IPA |
 
 ## 每次提审的必查项
 
@@ -118,7 +119,7 @@
    bash scripts/check-release-version.sh
    ```
 
-   完整素材检查依赖 ffprobe。另检查发布说明是否残留 `✕`；当前该字符拦截在 ios-release 中，不属于通用内容脚本。脚本不验证线上页面是否可访问、Demo 是否可用、问卷是否正确或 Apple 是否接受。
+   完整素材检查依赖 ffprobe；文本检查也覆盖 `review_information/notes.txt` 的非空和 4,000 字符上限。另检查发布说明是否残留 `✕`；当前该字符拦截在 ios-release 中，不属于通用内容脚本。脚本不验证线上页面是否可访问、Demo 是否可用、问卷是否正确或 Apple 是否接受。
 6. **线上回读与收尾**：保存后读取 ASC 每种语言的实际文本，确认 build 与发布设置符合目标。若同步素材，确认 iPhone / iPad 截图和预览已处理完成。对审核消息发送、重新提交、审核通过和公开上架分别取证，不能用其中一个状态替代其余状态。
 
 操作入口见[发布手册](RELEASE.md)及[元数据说明](../fastlane/metadata/README.md)。仅修 What's New 时优先只修改对应字段；完整元数据工作流还会同步其他文本、截图、预览，并设为手动发布，不应为了一个文案修复无差别重跑。
