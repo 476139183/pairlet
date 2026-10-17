@@ -3,7 +3,11 @@ package dev.ccpocket.app.desktop
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitDragOrCancellation
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -41,6 +45,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -95,31 +100,48 @@ val LocalWindowChrome = staticCompositionLocalOf { DesktopWindowChrome() }
 /**
  * Drag-to-move plus double-click-to-zoom for an undecorated window, as a plain Modifier.
  *
- * Lifted verbatim out of the old title bar, comments included — this is the part that took the tuning.
  * Anchor to the GLOBAL mouse position (AWT points), not the compose drag delta: deltas are physical px
  * (2× on Retina → the window outruns the cursor) and are measured relative to the moving window itself
  * (feedback loop → jitter). Grab the mouse-to-window offset on press and pin the window to it —
  * density-independent, no feedback.
  */
-fun windowDragAndZoom(window: java.awt.Window, onToggleMax: () -> Unit): Modifier = Modifier
+fun windowDragAndZoom(window: java.awt.Window, onToggleMax: () -> Unit): Modifier = windowDragAndZoom(
+    pointerLocation = { java.awt.MouseInfo.getPointerInfo()?.location },
+    windowLocation = { window.location },
+    moveWindow = { window.location = it },
+    onToggleMax = onToggleMax,
+)
+
+/** AWT screen points stay at this boundary; tests can move the pointer without a real native window. */
+internal fun windowDragAndZoom(
+    pointerLocation: () -> java.awt.Point?,
+    windowLocation: () -> java.awt.Point,
+    moveWindow: (java.awt.Point) -> Unit,
+    onToggleMax: () -> Unit,
+): Modifier = Modifier
     .pointerInput(Unit) {
         detectTapGestures(onDoubleTap = { onToggleMax() }) // double-click zoom, beside the drag detector
     }
     .pointerInput(Unit) {
-        var grab: java.awt.Point? = null // mouse−window offset at press, in screen points
-        detectDragGestures(
-            onDragStart = {
-                grab = java.awt.MouseInfo.getPointerInfo()?.location?.let {
-                    java.awt.Point(it.x - window.x, it.y - window.y)
+        awaitEachGesture {
+            // Snapshot BEFORE crossing drag slop. Capturing in onDragStart loses the first movement
+            // (a fast press → move → release used to move the window by zero).
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val startMouse = pointerLocation() ?: return@awaitEachGesture
+            val startWindow = windowLocation()
+            fun move() {
+                pointerLocation()?.let { mouse ->
+                    moveWindow(java.awt.Point(startWindow.x + mouse.x - startMouse.x,
+                        startWindow.y + mouse.y - startMouse.y))
                 }
-            },
-            onDragEnd = { grab = null },
-            onDragCancel = { grab = null },
-        ) { change, _ ->
-            change.consume()
-            val g = grab ?: return@detectDragGestures
-            java.awt.MouseInfo.getPointerInfo()?.location?.let { m ->
-                window.setLocation(m.x - g.x, m.y - g.y)
+            }
+            // Mouse dragging must not inherit the much larger touch slop (18dp).
+            val firstDrag = if (down.type == PointerType.Mouse) awaitDragOrCancellation(down.id)
+                else awaitTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
+            if (firstDrag != null && firstDrag.pressed) {
+                firstDrag.consume()
+                move()
+                drag(firstDrag.id) { change -> move(); change.consume() }
             }
         }
     }

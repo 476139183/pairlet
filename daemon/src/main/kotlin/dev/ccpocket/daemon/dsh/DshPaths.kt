@@ -12,7 +12,7 @@ import kotlin.io.path.listDirectoryEntries
  * ~/.dsh/sessions/                       # or $DSH_HOME/sessions
  * └── --<normalized-cwd>--/              # LOSSY project key; `_no-cwd` when the session had no cwd
  *     └── <encoded-session-id>/
- *         ├── session.v3.jsonl.zstd      # current generation; .jsonl when compression is disabled
+ *         ├── session.v4.jsonl.zstd      # current generation; .jsonl when compression is disabled
  *         ├── session.jsonl.zstd         # immutable legacy generation, possibly still present
  *         ├── *.tmp / .dsh-mkdir-*       # sidecars — skip
  *         └── *.lock                     # never touched

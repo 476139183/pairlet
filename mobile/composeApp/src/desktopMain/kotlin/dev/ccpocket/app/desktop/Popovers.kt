@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -637,8 +638,12 @@ fun QuickActionsPopover(model: DesktopModel, onDismiss: () -> Unit) {
 @Composable
 fun ModelPopover(model: DesktopModel, onDismiss: () -> Unit) {
     Column(
-        Modifier.width(340.dp).clip(RoundedCornerShape(14.dp)).background(Tok.raised)
-            .border(1.dp, Tok.hair, RoundedCornerShape(14.dp)).padding(15.dp)
+        Modifier.width(340.dp).heightIn(max = 560.dp)
+            .clip(RoundedCornerShape(14.dp)).background(Tok.raised)
+            .border(1.dp, Tok.hair, RoundedCornerShape(14.dp))
+            // #406: gateway catalogs can exceed the window. Bound before scrolling so the last
+            // model and custom-id field remain reachable, including in a shorter popup host.
+            .verticalScroll(rememberScrollState()).padding(15.dp)
             // the focusable popup owns the keyboard while open — Esc must close from inside it
             .onPreviewKeyEvent { e ->
                 if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) { onDismiss(); true } else false

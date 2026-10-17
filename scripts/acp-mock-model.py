@@ -26,11 +26,12 @@ Behaviour is chosen by trigger words in the user text since the last assistant m
   READFILE <path>  -> the agent's file-read tool on <path>
   RUNCMD <path>    -> a PLAIN shell call (no escalation) `echo cmd-ran > <path>`, to see whether a mode runs,
                asks or refuses an ordinary command
+  ESCALATECMD <path> -> write "approved-run" via a shell command with explicit sandbox escalation
   "Reply with exactly: X" -> text X
   anything else -> text "ok"
 A request whose last message is a tool result answers "done".
 """
-import argparse, json, os, re, sys, threading, time
+import argparse, json, os, re, shlex, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 LOG = None
@@ -90,7 +91,7 @@ def decide(last_text, last_is_tool, tool_names, schemas=None):
         return ("text", "done", 0)
     schemas = schemas or {}
     t = last_text
-    for trig in ("BGAGENT", "AGENTME", "BGBASH", "BASHME", "SUBBASH", "SUBTASK", "WRITEFILE", "READFILE", "RUNCMD",
+    for trig in ("BGAGENT", "AGENTME", "BGBASH", "BASHME", "SUBBASH", "SUBTASK", "WRITEFILE", "READFILE", "RUNCMD", "ESCALATECMD",
                  "SLOW", "PONG"):
         if trig in t:
             break
@@ -98,11 +99,16 @@ def decide(last_text, last_is_tool, tool_names, schemas=None):
         trig = None
     shell = next((n for n in tool_names if n.lower() in ("bash", "shell", "exec", "run_shell", "execute")), None) \
         or next((n for n in tool_names if "bash" in n.lower() or "shell" in n.lower() or "exec" in n.lower()), None)
-    if trig in ("WRITEFILE", "READFILE", "RUNCMD"):
+    if trig in ("WRITEFILE", "READFILE", "RUNCMD", "ESCALATECMD"):
         m = re.search(trig + r"\s+(\S+)", t)
         path = m.group(1).strip("`'\".,") if m else "mock-probe.txt"
         if trig == "RUNCMD":
             return ("tool", (shell or "Bash", {"command": "echo cmd-ran > %s" % path, "description": "probe plain command"}), 0)
+        if trig == "ESCALATECMD":
+            return ("tool", (shell or "Bash", {
+                "command": "echo approved-run > %s" % shlex.quote(path), "description": "probe approved write",
+                "sandbox_permissions": "danger-full-access", "justification": "probe approval",
+            }), 0)
         return file_tool_call("write" if trig == "WRITEFILE" else "read", path, tool_names, schemas)
     if trig == "SUBTASK":
         return ("text", "sub-result mango", 0)
@@ -173,6 +179,14 @@ class H(BaseHTTPRequestHandler):
             last_is_tool = last.get("role") == "user" and isinstance(lc, list) and any(
                 isinstance(b, dict) and b.get("type") == "tool_result" for b in lc)
             last_user_text = text_of(lc) if last.get("role") == "user" else ""
+            if last_is_tool:
+                # After cancellation DSH can merge the previous tool result and the next user
+                # message into one Anthropic user block. Respond to the new text, not "done".
+                last_result = max(i for i, b in enumerate(lc)
+                                  if isinstance(b, dict) and b.get("type") == "tool_result")
+                next_text = text_of(lc[last_result + 1:]).strip()
+                if next_text:
+                    last_is_tool, last_user_text = False, next_text
             act = decide(last_user_text, last_is_tool, names, schemas_of(tools))
             log("REQ#%d anthropic model=%s effort=%s stream=%s nmsg=%d tools=%s -> %s" % (
                 rid, body.get("model"), json.dumps(body.get("output_config") or body.get("thinking")), body.get("stream"), len(msgs), names, json.dumps(act)[:200]))

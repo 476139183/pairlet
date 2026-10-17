@@ -648,11 +648,9 @@ class PocketRepository(
     private val pushDesired = MutableStateFlow(false)
     private val pushConnected = MutableStateFlow(false)
     private var attachedPushKey: PairingKey? = null
-    // direct-LAN registration seams (internal for tests, mirroring promptReceiptTimeoutMs). directLinkUp
-    // includes the in-flight direct attempt: a RegisterPush buffered into the relay control outbox during
-    // that ≤3s window would otherwise sit undrained for as long as the phone stays on the LAN, then flush
-    // a STALE token over a newer one at the next real relay attach.
-    internal var directLinkUp: () -> Boolean = { directE2E.connected || directAttemptInFlight }
+    // Register only after Attached chooses a live route. A helper opened during an unconfirmed direct
+    // attempt can overlap its fallback relay and supersede that business connection (#404, A-3).
+    internal var directLinkUp: () -> Boolean = { directE2E.connected }
     internal var pushDial: suspend (PairedDaemon, RegisterPush, Long) -> DepositOutcome =
         { p, f, ackMs -> RelayControlDial.deposit(p, f, ackMs) }
     /** Test seam: a coordinator of this test's own, instead of the process-wide one. */
@@ -2457,6 +2455,7 @@ class PocketRepository(
      */
     private suspend fun submitPush(frame: RegisterPush, ackTimeoutMs: Long): SubmitOutcome {
         val p = paired.value ?: return SubmitOutcome.Failed(FailReason.NO_ROUTE)
+        if (!pushConnected.value) return SubmitOutcome.Failed(FailReason.NO_ROUTE)
         if (directLinkUp()) {
             return try {
                 when (val r = pushDial(p, frame, ackTimeoutMs)) {
@@ -2819,6 +2818,7 @@ class PocketRepository(
         pinLink.onDisconnect() // #362: a new socket is a new pin sync generation — only its own DaemonInfo resumes it
         presenceProbeJob?.cancel(); presenceProbeJob = null // a full relaunch moots the #145 probe
         connected.value = true // internal "attempt active/attached" guard for retry/foreground — NOT the UI
+        pushConnected.value = false // registration waits for this attempt's actual Attached
         attachedThisSession = false; daemonOffline = false; relayDeadlinePassed = false; listWaitJob?.cancel()
         diagnosticConnectionId = null
         if (!reconnect) { pairingInvalid = false; hadReadyThisSession = false; directoriesLoaded.value = false }
@@ -2843,6 +2843,17 @@ class PocketRepository(
                 merge(relay.deaf, directE2E.deaf).collect { onDeafLink() }
             }
         }
+        // Queue the initial burst only AFTER retiring the previous socket and choosing the new route.
+        // During retirement directAttemptInFlight is still false: enqueueing here used to strand the
+        // reattach frames in the relay outbox even when the new direct connection succeeded (#404).
+        fun queueInitialFrames() {
+            scope.launch {
+                send(clientCaps())
+                send(ListDirectories())
+                send(ListPendingApprovals)
+                if (reconnect) restoreAfterReconnect()
+            }
+        }
         val prev = connectJob
         connectJob = scope.launch {
             // #142: retire the old socket BEFORE dialing. cancel() alone is cooperative — the old
@@ -2855,7 +2866,11 @@ class PocketRepository(
             val result = runCatching {
                 if (useRelay) {
                     val p = paired.value ?: error("not paired")
-                    dialForTest?.let { dial -> dial(p, firstTicket.also { firstTicket = null }); return@runCatching }
+                    dialForTest?.let { dial ->
+                        queueInitialFrames()
+                        dial(p, firstTicket.also { firstTicket = null })
+                        return@runCatching
+                    }
                     // direct-first: the daemon-advertised LAN/loopback address skips the relay AND the
                     // proxy leg entirely. Unreachable/refused/bad handshake → silent same-attempt relay
                     // fallback + cooldown. A drop AFTER it was live exits normally into the reconnect path.
@@ -2866,6 +2881,7 @@ class PocketRepository(
                     if (du != null && epochMillis() >= (directCooldownUntil[p.accountId] ?: 0L) &&
                         directEligibility(du, networkSnapshotProvider(), sameMachineClient) == DirectEligibility.Dial) {
                         directAttemptInFlight = true
+                        queueInitialFrames()
                         try {
                             directConnectForTest?.invoke(du, p) ?: directE2E.connect(du, p, Pairing.deviceKeys())
                             return@runCatching
@@ -2878,7 +2894,7 @@ class PocketRepository(
                         } finally {
                             directAttemptInFlight = false
                         }
-                    }
+                    } else queueInitialFrames()
                     // frames optimistically queued for the direct leg (incl. this attempt's ListDirectories)
                     // ride the relay instead — nothing silently evaporates in the fallback
                     directE2E.drainPending().forEach { relay.send(it) }
@@ -2900,20 +2916,6 @@ class PocketRepository(
             val err = result.exceptionOrNull()
             if (err is CancellationException) return@launch // intentional disconnect/relaunch — not a failure
             onTransportDown(err)
-        }
-        // ask for the list now; it buffers in the outbox and flushes once the handshake lands. Ready is
-        // asserted only when the real Directories reply arrives (see handle()), never optimistically here.
-        // On a reconnect, also re-sync whatever page the user is parked on (re-open a live chat, re-list sessions).
-        // ClientCaps FIRST: it declares this build understands agent="opencode", so the daemon stops
-        // filtering those rows out of the lists that follow (old builds never send it — see Messages.kt).
-        scope.launch {
-            // maxFrameBytes: what the transports really accept (RelayE2EConnection.MAX_FRAME_BYTES). Declaring it is
-            // what lets the daemon send full-size history windows; a daemon that never hears it sizes every frame
-            // for the 1 MiB shipped iOS builds were bound to (KTOR-6963), shedding pictures from big replays.
-            send(clientCaps())
-            send(ListDirectories())
-            send(ListPendingApprovals)
-            if (reconnect) restoreAfterReconnect()
         }
         startGrace(reconnect)
         startConnectWatchdog()
@@ -2946,6 +2948,7 @@ class PocketRepository(
     /** The socket died. Stay on the current screen; banner + backoff retries take it from here. */
     private fun onTransportDown(err: Throwable?) {
         connected.value = false
+        pushConnected.value = false
         linkStableJob?.cancel(); linkStableJob = null // #144: this link died — it never (or no longer) counts as stable
         presenceProbeJob?.cancel(); presenceProbeJob = null // #145: the retry path owns recovery from here
         if (!sessionActive.value) { // an intentional teardown is not a connection failure — don't report it
@@ -3106,6 +3109,9 @@ class PocketRepository(
     fun disconnect() {
         sidePanes.clear() // #311: nothing behind a pane survives the link
         sessionActive.value = false
+        // Close the registrar gate BEFORE cancelling sockets: an unconfined cancellation callback may
+        // submit again synchronously, and must not spin on NO_ROUTE while connected still reads true.
+        pushConnected.value = false
         // An OpenSession worker belongs to the link/computer that accepted the click. It may still be
         // queued (or suspended on a full reconnect outbox), so invalidating only the claim is insufficient:
         // the worker could wake after drainPending() and enqueue the old machine's open into the next link.
@@ -3142,7 +3148,6 @@ class PocketRepository(
         // `connected` instead of burning attempts). The per-pairing CONFIRMATION deliberately survives —
         // a reconnect is not evidence that the relay forgot the token — while a machine SWITCH retargets
         // the identity in ensurePushLink().
-        pushConnected.value = false
         // per-daemon truth must not survive a machine switch: a stale non-null presetsState would keep
         // the token-bearing create/edit form UNLOCKED after switching to a daemon that predates presets
         // (it silently drops FetchPresets), breaking "never fire a plaintext token at a peer that can't

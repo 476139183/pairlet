@@ -4,6 +4,7 @@
 
 | 任务 | 入口 |
 |---|---|
+| 2026-10-17 GitHub issue 核查与修复候选 | [全部 16 项分诊、DSH v4 与桌面菜单修复及验证限制](analysis/2026-10-17-github-issues.md) |
 | 了解架构、模块与开发指南 | [工程 Wiki](https://wiki.pairlet.org/) |
 | 管理本期 Issue 修复与交付 | [2026-09-13 本期任务管理](iterations/2026-09-13-issue-delivery.md) |
 | 交给 Claude Code 独立实施后续 Issue | [2026-09-14 任务目录与方案](iterations/2026-09-14-claude-code/README.md) |
