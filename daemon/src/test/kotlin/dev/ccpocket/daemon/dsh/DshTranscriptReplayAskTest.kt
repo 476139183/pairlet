@@ -22,8 +22,8 @@ import kotlin.test.assertTrue
 class DshTranscriptReplayAskTest {
 
     /** `'` stands in for `\"` so the deeply-escaped fixtures stay readable in a raw string. */
-    private fun transcript(vararg lines: String): Path {
-        val file = Files.createTempDirectory("dsh-replay-ask").resolve("session.jsonl")
+    private fun transcript(vararg lines: String, filename: String = "session.jsonl"): Path {
+        val file = Files.createTempDirectory("dsh-replay-ask").resolve(filename)
         file.writeText(lines.joinToString("\n", postfix = "\n").replace("'", "\\\""))
         return file
     }
@@ -40,6 +40,30 @@ class DshTranscriptReplayAskTest {
     private fun askResult(answersJson: String) =
         """{"type":"tool/result","seq":3,"time":3,"data":{"turn":1,"step":1,"message":{"content":[""" +
             """{"type":"tool-result","toolCallId":"call-1","content":[{"type":"text","text":"$answersJson"}]}]}}}"""
+
+    @Test
+    fun v4_tool_role_result_restores_question_answers() {
+        val file = transcript(
+            header.replace("\"version\":0", "\"version\":4"),
+            askCall,
+            """{"type":"tool/result","seq":3,"time":3,"surfaceOp":"append","data":{"turn":1,"step":1,"message":{"id":"r3","role":"tool","source":{"kind":"tool","callId":"call-1"},"toolCallId":"call-1","content":[{"type":"text","text":"{'answers':[{'id':'color','selected':['Blue']},{'id':'size','selected':[],'custom':'Medium'}]}"}]}}}""",
+            filename = "session.v4.jsonl",
+        )
+        val replay = DshTranscriptReplay.slice(file, null)
+        assertEquals("complete", replay.quality)
+        val card = replay.messages.single()
+        assertEquals("AskUserQuestion", card.tool)
+        val answers = assertNotNull(card.answers)
+        assertEquals(listOf("Blue", "Medium"), answers.map { it.answer })
+    }
+
+    @Test
+    fun v4_result_with_conflicting_call_ids_does_not_patch_a_tool() {
+        val data = DshTranscript.parseLine(
+            """{"message":{"role":"tool","source":{"kind":"tool","callId":"other-call"},"toolCallId":"call-1","content":[{"type":"text","text":"wrong output"}]}}""",
+        )
+        assertEquals(emptyList(), DshAsk.toolResults(data))
+    }
 
     @Test
     fun an_answered_question_replays_as_the_answered_card() {

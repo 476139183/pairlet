@@ -1158,15 +1158,19 @@ private fun ChatSubHeader(model: DesktopModel, onTerminalMenu: () -> Unit = {}) 
                 // (38dp tall) — inside this row's 28+20dp geometry, without touching its height
                 modifier = Modifier.offset(y = (-5).dp),
             )
-            Text(
-                model.chatTitle, color = Tok.tx, fontFamily = Dk.ui, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                style = tightCenter(15.sp),
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                // the title region is the window's drag handle, exactly as the title bar's label region
-                // was — and for the same reason it is the ONLY thing wearing it: this row's own buttons
-                // must keep their clicks, so the gesture goes on the flexible, non-interactive middle.
-                modifier = Modifier.weight(1f).then(chrome.dragAndZoomModifier),
-            )
+            Box(
+                // Windows has a 38dp control row: expose the same height for dragging, rather than
+                // only the text's narrow line box. Controls remain outside the drag region (#406).
+                Modifier.weight(1f).heightIn(min = if (chrome.mac) 0.dp else 38.dp)
+                    .then(chrome.dragAndZoomModifier),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Text(
+                    model.chatTitle, color = Tok.tx, fontFamily = Dk.ui, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                    style = tightCenter(15.sp),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
             AgentBadge(model.chatAgent)
             // quick terminal at the session's cwd — only when that directory exists on THIS machine, so a
             // remote machine's session never shows it (same locality contract as DesktopPathOpener). #44

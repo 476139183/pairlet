@@ -34,10 +34,17 @@ class BackendSessionFilesTest {
     private fun call(arguments: JsonObject, id: String = "c1", tool: String = "str_replace_editor") = obj(
         "type" to str("tool/call"), "data" to obj("callId" to str(id), "name" to str(tool), "arguments" to str(arguments.toString())),
     )
-    private fun result(id: String = "c1", failed: Boolean? = null, placement: JsonElement = str("append"), text: String = "success"): JsonObject {
+    private fun result(id: String = "c1", failed: Boolean? = null, placement: JsonElement = str("append"), text: String = "success", version: Int = 3): JsonObject {
         val block = mutableMapOf<String, JsonElement>("type" to str("tool-result"), "toolCallId" to str(id),
             "content" to JsonArray(listOf(obj("type" to str("text"), "text" to str(text)))))
         if (failed != null) block["isError"] = JsonPrimitive(failed)
+        if (version == 4) {
+            block.remove("type")
+            block["role"] = str("tool")
+            block["source"] = obj("kind" to str("tool"), "callId" to str(id))
+            return obj("type" to str("tool/result"), "surfaceOp" to placement,
+                "data" to obj("message" to JsonObject(block)))
+        }
         return obj("type" to str("tool/result"), "surfaceOp" to placement,
             "data" to obj("message" to obj("content" to JsonArray(listOf(JsonObject(block))))))
     }
@@ -62,8 +69,8 @@ class BackendSessionFilesTest {
     @Test fun dshAllSupportedGenerationsResolveAndExposeOnlySuccessfulChanges() {
         val cwd = project()
         val target = Files.writeString(cwd.resolve("a.txt"), "after")
-        for (v in 0..3) {
-            dsh(cwd, listOf(call(args(target.toString())), result()), v, compressed = true)
+        for (v in 0..4) {
+            dsh(cwd, listOf(call(args(target.toString())), result(version = v)), v, compressed = true)
             assertEquals("after", read(AgentKind.DSH, cwd, "a.txt").text)
             assertEquals(listOf(target.toString()), changed(AgentKind.DSH, cwd).map { it.path })
             val delta = diff(AgentKind.DSH, cwd, "a.txt")
@@ -76,7 +83,7 @@ class BackendSessionFilesTest {
 
     @Test fun dshVerifiedSessionReadsUntouchedFilesAndStreamsThroughTheProductionGate() = runBlocking {
         val cwd = project()
-        dsh(cwd)
+        dsh(cwd, version = 4)
         Files.writeString(cwd.resolve("AGENTS.md"), "local instructions")
         val frames = mutableListOf<Frame>()
         SessionFilesService.streamFileWithSources(AgentKind.DSH, cwd.toString(), sid, "AGENTS.md", true, sources(), frames::add)
@@ -87,6 +94,27 @@ class BackendSessionFilesTest {
         SessionFilesService.streamFileWithSources(AgentKind.DSH, cwd.toString(), sid, "large.png", true, sources(), frames::add)
         assertTrue(frames.all { it is FileContentChunk })
         assertTrue((frames.last() as FileContentChunk).last)
+    }
+
+    @Test fun v4FailedMalformedAndMismatchedResultsNeverAuthorizeOutsideReads() {
+        val cwd = project()
+        val outside = Files.writeString(tmp.resolve("outside"), "external").toRealPath()
+        val valid = result(version = 4)
+        val data = valid["data"]!!.jsonObject
+        val message = data["message"]!!.jsonObject
+        fun altered(vararg fields: Pair<String, JsonElement>) = JsonObject(valid + ("data" to
+            JsonObject(data + ("message" to JsonObject(message + fields.toMap())))))
+        for (reply in listOf(result(failed = true, version = 4),
+            altered("isError" to str("not-a-boolean")),
+            altered("source" to obj("kind" to str("tool"), "callId" to str("another-call"))),
+            altered("source" to obj("kind" to str("plugin"), "callId" to str("c1"))),
+            altered("content" to JsonNull))) {
+            dsh(cwd, listOf(call(args(outside.toString())), reply), version = 4)
+            assertTrue(changed(AgentKind.DSH, cwd).isEmpty())
+            assertFalse(read(AgentKind.DSH, cwd, outside.toString()).ok)
+        }
+        dsh(cwd, listOf(call(args(outside.toString())), valid), version = 4)
+        assertTrue(read(AgentKind.DSH, cwd, outside.toString()).ok)
     }
 
     @Test fun dshUnknownSessionWrongHeaderAndCollidingDirectoryNeverUnlockReads() {
@@ -106,9 +134,9 @@ class BackendSessionFilesTest {
         val cwd = project()
         Files.writeString(cwd.resolve("a"), "safe")
         dsh(cwd, version = 0)
-        dsh(cwd, version = 4)
+        dsh(cwd, version = 5)
         assertFalse(read(AgentKind.DSH, cwd, "a").ok)
-        dsh(cwd, version = 3, filenameVersion = 4)
+        dsh(cwd, version = 4, filenameVersion = 5)
         assertFalse(read(AgentKind.DSH, cwd, "a").ok)
     }
 

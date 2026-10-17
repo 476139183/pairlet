@@ -88,9 +88,18 @@ internal class BackendSessionFiles(
                 }
                 "tool/result" -> {
                     if (DshTranscript.messagePlacement(event, header.version) != DshTranscript.MessagePlacement.APPEND) continue
-                    for (part in data.obj("message")?.array("content").orEmpty()) {
-                        val block = part as? JsonObject ?: continue
-                        if (block.str("type") != "tool-result") continue
+                    val message = data.obj("message") ?: continue
+                    val results = if (header.version >= 4) {
+                        // V4 lifts content/isError/toolCallId onto the tool-role message. Keep this
+                        // evidence gate strict: a mismatched producer cannot grant file-read authority.
+                        val callId = message.str("toolCallId")?.takeIf { it.isNotBlank() } ?: continue
+                        val source = message.obj("source") ?: continue
+                        if (message.str("role") != "tool" || source.str("kind") != "tool" || source.str("callId") != callId) continue
+                        listOf(message)
+                    } else message.array("content").orEmpty().mapNotNull {
+                        (it as? JsonObject)?.takeIf { block -> block.str("type") == "tool-result" }
+                    }
+                    for (block in results) {
                         val (name, args) = pending.remove(block.str("toolCallId")) ?: continue
                         // Released DSH omits isError on successful results; failed/aborted calls set true.
                         // A malformed marker is unknown, not success. The result's content must exist.

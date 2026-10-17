@@ -123,7 +123,7 @@ class DshUsageScannerTest {
     @Test
     fun `an unknown format version is skipped whole but a subagent session still counts`() {
         val future = store()
-        session(future, version = 4, events = listOf(assistantMsg(1, """{"inputTokens":10,"outputTokens":10}""")))
+        session(future, version = 5, events = listOf(assistantMsg(1, """{"inputTokens":10,"outputTokens":10}""")))
         assertTrue(DshUsageScanner.usageRecords(0, future).isEmpty(), "an unsupported generation is never guessed at")
 
         val sub = store()

@@ -11,6 +11,15 @@ import dev.ccpocket.protocol.PushRegistrationResult
 import dev.ccpocket.protocol.RegisterPush
 import dev.ccpocket.protocol.Role
 import dev.ccpocket.protocol.e2e.Wire
+import dev.ccpocket.protocol.e2e.E2ECrypto
+import dev.ccpocket.protocol.e2e.E2ESession
+import dev.ccpocket.protocol.Directories
+import dev.ccpocket.protocol.ListDirectories
+import dev.ccpocket.protocol.OpenSession
+import dev.ccpocket.protocol.SessionLive
+import dev.ccpocket.protocol.ConvoHistory
+import dev.ccpocket.protocol.HistoryMessage
+import dev.ccpocket.protocol.ChatRole
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import java.io.DataInputStream
@@ -30,7 +39,13 @@ import kotlin.concurrent.thread
  * expected), answers every [RegisterPush] with a [PushRegistrationResult], and swallows the Noise HANDSHAKE
  * without ever answering it — exactly what the device sees while the computer is off.
  */
-class FakeRelayServer : AutoCloseable {
+class FakeRelayServer(
+    // Optional paired daemon for real relay/direct transport tests. The default remains an offline daemon.
+    private val daemonKeys: E2ECrypto.KeyPair? = null,
+    private val devicePublic: ByteArray? = null,
+    private val confirmHandshake: Boolean = true,
+    private val acknowledgePush: Boolean = true,
+) : AutoCloseable {
     private val server = ServerSocket(0, 8, InetAddress.getLoopbackAddress())
     val url = "ws://127.0.0.1:${server.localPort}"
     /** Every accepted WebSocket connection — a helper dial for the same device would show up here. */
@@ -38,6 +53,9 @@ class FakeRelayServer : AutoCloseable {
     /** HANDSHAKE payloads received (and left unanswered: nobody is there to answer). */
     val handshakes = AtomicInteger()
     val registrations = CopyOnWriteArrayList<RegisterPush>()
+    val received = CopyOnWriteArrayList<Frame>()
+    val activeConnections = AtomicInteger()
+    val maxActiveConnections = AtomicInteger()
     private val sockets = CopyOnWriteArrayList<Socket>()
 
     init {
@@ -60,15 +78,49 @@ class FakeRelayServer : AutoCloseable {
             "Sec-WebSocket-Accept: $accept\r\n\r\n").toByteArray())
         out.flush()
         connections.incrementAndGet()
+        maxActiveConnections.accumulateAndGet(activeConnections.incrementAndGet(), ::maxOf)
+        var session: E2ESession? = null
+        fun sealed(frame: Frame) {
+            val data = PocketJson.encodeToString(Envelope("d", 0L, body = frame)).encodeToByteArray()
+            writeFrame(out, OP_BINARY, Wire.payload(Wire.TRANSPORT, session!!.seal(data)))
+        }
+        try {
         while (true) {
             val (opcode, payload) = readFrame(input) ?: return
             when (opcode) {
                 OP_TEXT -> onText(out, payload.decodeToString())
-                OP_BINARY -> if (Wire.payloadType(payload) == Wire.HANDSHAKE) handshakes.incrementAndGet()
+                OP_BINARY -> when (Wire.payloadType(payload)) {
+                    Wire.HANDSHAKE -> {
+                        handshakes.incrementAndGet()
+                        val keys = daemonKeys ?: continue
+                        val (established, eph) = E2ESession.responder(keys.privateRaw, keys.publicRaw,
+                            requireNotNull(devicePublic), ByteArray(0), Wire.payloadBody(payload))
+                        session = established
+                        writeFrame(out, OP_BINARY, Wire.payload(Wire.HANDSHAKE, eph))
+                        if (confirmHandshake) sealed(Directories(emptyList()))
+                    }
+                    Wire.TRANSPORT -> {
+                        val plain = session?.open(Wire.payloadBody(payload)) ?: continue
+                        val body = PocketJson.decodeFromString<Envelope>(plain.decodeToString()).body
+                        received += body
+                        if (!confirmHandshake) continue
+                        when (body) {
+                            is ListDirectories -> sealed(Directories(emptyList()))
+                            is OpenSession -> {
+                                sealed(SessionLive("test-convo", body.workdir, body.resumeId, executing = false))
+                                val delta = body.lastEventSeq == 42L
+                                sealed(ConvoHistory("test-convo", if (delta) emptyList() else
+                                    listOf(HistoryMessage(ChatRole.ASSISTANT, "existing reply")), lastSeq = 42, delta = delta))
+                            }
+                            else -> {}
+                        }
+                    }
+                }
                 OP_PING -> writeFrame(out, OP_PONG, payload)
                 OP_CLOSE -> { runCatching { writeFrame(out, OP_CLOSE, ByteArray(0)) }; return }
             }
         }
+        } finally { activeConnections.decrementAndGet() }
     }
 
     private fun onText(out: OutputStream, text: String) {
@@ -76,6 +128,7 @@ class FakeRelayServer : AutoCloseable {
             is DeviceHello -> send(out, Attached(Role.DEVICE, "acct", relayProtoV = PROTO_V_PUSH_ACK))
             is RegisterPush -> {
                 registrations += body
+                if (!acknowledgePush) return
                 val rid = body.requestId ?: return
                 send(out, PushRegistrationResult(rid,
                     if (body.token.isBlank()) PushRegistrationOutcome.CLEARED else PushRegistrationOutcome.STORED))

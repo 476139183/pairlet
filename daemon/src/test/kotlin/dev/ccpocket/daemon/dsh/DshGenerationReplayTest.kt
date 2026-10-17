@@ -18,7 +18,8 @@ import kotlin.test.assertTrue
  * packages/session/session/src/types.ts and session-format-v{0-to-v1,1-to-v2,2-to-v3}.
  * V0/V1 retain packed top-level deltas; V2/V3 embed stream[] in assistant/message. The conversation
  * payloads below are shared, and V3 replaces start/end surface endpoints with startSeq/endSeq.
- * These are invented conversations, never copies of a local session.
+ * V4 tool-role results checked against the 0.2.0-rc.2 session / v3-to-v4 packages vendored in
+ * anywhere-labs/dsh-desktop (issue #409). These are invented conversations, never copies of a local session.
  */
 class DshGenerationReplayTest {
     private val root = Files.createTempDirectory("dsh-generation-replay")
@@ -53,8 +54,10 @@ class DshGenerationReplayTest {
         """{"turn":1,"step":1,"callId":"$callId","name":"read_file","arguments":"{\"path\":\"README.md\"}"}""")
 
     private fun result(seq: Int, text: String, callId: String = "call-1", error: Boolean = false,
-                       placement: String = "\"append\"", sources: String? = null, messageId: String = "r$seq"): String = event("tool/result", seq,
-        """{"turn":1,"step":1,"message":{"id":"$messageId","role":"user","source":{"kind":"tool","callId":"$callId"},"content":[{"type":"tool-result","toolCallId":"$callId","isError":$error,"content":[{"type":"text","text":"$text"}]}]}}""",
+                       placement: String = "\"append\"", sources: String? = null, messageId: String = "r$seq", version: Int = 3): String = event("tool/result", seq,
+        if (version >= 4)
+            """{"turn":1,"step":1,"message":{"id":"$messageId","role":"tool","source":{"kind":"tool","callId":"$callId"},"toolCallId":"$callId","isError":$error,"content":[{"type":"text","text":"$text"}]}}"""
+        else """{"turn":1,"step":1,"message":{"id":"$messageId","role":"user","source":{"kind":"tool","callId":"$callId"},"content":[{"type":"tool-result","toolCallId":"$callId","isError":$error,"content":[{"type":"text","text":"$text"}]}]}}""",
         placement, sources)
 
     private fun file(version: Int, compressed: Boolean, rows: String, store: Path = root): Path {
@@ -75,10 +78,10 @@ class DshGenerationReplayTest {
 
     @Test
     fun all_released_generations_are_discovered_and_replayed_in_both_encodings() {
-        for (version in 0..3) for (compressed in listOf(false, true)) {
+        for (version in 0..4) for (compressed in listOf(false, true)) {
             val store = root.resolve("v$version-$compressed")
             val transcript = file(version, compressed,
-                user(0, "First prompt") + assistant(1, "First reply") + call(2) + result(3, "File contents") +
+                user(0, "First prompt") + assistant(1, "First reply") + call(2) + result(3, "File contents", version = version) +
                     user(4, "Follow-up") + assistant(5, "Final reply"), store)
             val found = assertNotNull(DshTranscriptScanner.find(id, cwd, store))
             assertEquals(transcript, found.file)
@@ -111,6 +114,26 @@ class DshGenerationReplayTest {
         assertEquals(listOf("Current opening", "Current reply", "Later prompt"), DshTranscriptReplay.read(found.file).map { it.text })
         assertEquals(1, DshUsageScanner.usageRecords(0, root).size, "legacy and current must not double-count spend")
         assertTrue(beforeLegacy.contentEquals(Files.readAllBytes(legacy)))
+        assertTrue(beforeCurrent.contentEquals(Files.readAllBytes(current)))
+    }
+
+    @Test
+    fun v4_supersedes_v3_and_replays_failed_results_without_mutating_either_copy() {
+        val old = file(3, true, user(0, "Old opening") + assistant(1, "Old reply"))
+        val current = file(4, true, user(0, "Current opening") + call(1) +
+            result(2, "Permission denied", error = true, version = 4) + assistant(3, "Current reply"))
+        val beforeOld = Files.readAllBytes(old)
+        val beforeCurrent = Files.readAllBytes(current)
+        val found = assertNotNull(DshTranscriptScanner.find(id, cwd, root))
+        assertEquals(current, found.file)
+        assertEquals("Current opening", DshTranscriptScanner.scan(cwd, root).single().title)
+        val replay = DshTranscriptReplay.slice(found.file, null)
+        assertEquals("complete", replay.quality)
+        assertNull(replay.readError)
+        assertEquals(false, replay.messages[1].ok)
+        assertEquals("Permission denied", replay.messages[1].output)
+        assertEquals(1, DshUsageScanner.usageRecords(0, root).size)
+        assertTrue(beforeOld.contentEquals(Files.readAllBytes(old)))
         assertTrue(beforeCurrent.contentEquals(Files.readAllBytes(current)))
     }
 
@@ -150,7 +173,7 @@ class DshGenerationReplayTest {
 
     @Test
     fun same_generation_cursors_still_support_incremental_replay_and_older_pages() {
-        val transcript = file(3, true, user(0, "Opening"))
+        val transcript = file(4, true, user(0, "Opening"))
         val initial = DshTranscriptReplay.slice(transcript, null)
         append(transcript, assistant(1, "Reply") + user(2, "Follow-up"))
         val replay = DshTranscriptReplay.slice(transcript, initial.lastSeq)
@@ -162,21 +185,32 @@ class DshGenerationReplayTest {
     }
 
     @Test
+    fun v3_cursor_cannot_skip_the_migrated_v4_history() {
+        val old = file(3, false, user(0, "Opening") + assistant(1, "Reply"))
+        val cursor = DshTranscriptReplay.slice(old, null).lastSeq!!
+        val current = file(4, true, user(0, "Opening") + assistant(1, "Reply") + user(2, "New prompt"))
+        val replay = DshTranscriptReplay.slice(current, cursor)
+        assertFalse(replay.delta)
+        assertEquals(listOf("Opening", "Reply", "New prompt"), replay.messages.map { it.text })
+        assertEquals("unavailable", DshTranscriptReplay.page(current, cursor).quality)
+    }
+
+    @Test
     fun unknown_current_generation_is_visible_and_never_replays_an_older_copy() {
         file(0, false, user(0, "Stale content"))
-        file(3, true, user(0, "Also stale"))
-        val current = file(4, true, user(0, "Future content"))
+        file(4, true, user(0, "Also stale"))
+        val current = file(5, true, user(0, "Future content"))
         val found = assertNotNull(DshTranscriptScanner.find(id, cwd, root))
         assertEquals(current, found.file)
         assertFalse(found.header.isSupported)
         val summary = DshTranscriptScanner.scan(cwd, root).single()
-        assertTrue(summary.firstPrompt.contains("unsupported session format v4"))
+        assertTrue(summary.firstPrompt.contains("unsupported session format v5"))
         val replay = DshTranscriptReplay.slice(found.file, 2L)
         assertEquals("unavailable", replay.quality)
         assertTrue(replay.delta, "an unavailable read must never be an explicit client clear")
         assertTrue(replay.messages.isEmpty())
         assertNull(replay.lastSeq, "the last successful cursor must not be advanced")
-        assertTrue(replay.readError!!.contains("unsupported session format v4"))
+        assertTrue(replay.readError!!.contains("unsupported session format v5"))
         assertNull(DshTranscript.resumeMeta(current).model)
         assertTrue(DshUsageScanner.usageRecords(0, root).isEmpty())
     }
