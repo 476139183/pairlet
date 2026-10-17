@@ -17,6 +17,7 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -116,12 +117,19 @@ class DshBackendLiveIT {
 
     @AfterEach
     fun cleanupHarnesses() {
+        harnesses.forEach { runCatching { it.dump("final") } }
         harnesses.forEach { runCatching { it.close() } }
         workdirs.forEach { runCatching { it.toFile().deleteRecursively() } }
         DshCatalog.clearForTest()
     }
 
     private fun scratch(): java.nio.file.Path = createTempDirectory("cc-pocket-dsh-live").also { workdirs.add(it) }
+
+    private fun escalationPrompt(path: java.nio.file.Path): String =
+        "ESCALATECMD $path : run the shell command `echo approved-run > $path`. " +
+            "Use the bash tool, not a file-write tool. If the sandbox denies it, request approval to " +
+            "retry the exact command using sandbox_permissions=danger-full-access (justification: probe). " +
+            "If the user rejects approval, stop without retrying. Otherwise say done."
 
     private suspend fun launch(
         backend: DshBackend,
@@ -159,22 +167,23 @@ class DshBackendLiveIT {
     }
 
     /**
-     * What PLAN means on dsh (`DSH_PERMISSION_MODE=read-only`, fixed at launch): the model asks for one read, one
-     * file write and one plain command, every ask is approved, and the disk says what really happened. Account-free
-     * with `scripts/acp-mock-model.py` (its READFILE / WRITEFILE / RUNCMD triggers).
+     * DSH's read-only sandbox allows explicit, user-approved escalation. A real model can retry a denied
+     * plain write with escalation, unlike the scripted model. Reject these asks and check the disk;
+     * separately prove that an explicit escalation is rejected/allowed according to the user's answer.
      */
     @Test
-    fun plan_mode_reads_but_neither_writes_nor_runs() = runBlocking {
+    fun plan_mode_blocks_writes_without_approval_and_honours_escalation_decisions() = runBlocking {
         val workdir = scratch()
         val note = workdir.resolve("note.txt").also { it.toFile().writeText("the secret word is mango\n") }
         val written = workdir.resolve("plan-written.txt")
         val ran = workdir.resolve("plan-cmd.txt")
+        val escalated = workdir.resolve("approved.txt")
         val h = launch(DshBackend(null), AgentSpec(workdir = workdir, mode = PermissionMode.PLAN), "plan")
         assertTrue(awaitEvent<AgentEvent.SessionInit>(h.events, 60_000) != null, "no session")
         val asks = ArrayList<String>()
-        val approve: suspend (AgentEvent.ControlRequest) -> Unit = {
+        val reject: suspend (AgentEvent.ControlRequest) -> Unit = {
             asks += it.toolName
-            h.backend.respondPermission(it.requestId, true, false, it.input, null, null)
+            h.backend.respondPermission(it.requestId, false, false, it.input, null, null)
         }
         for ((label, prompt) in listOf(
             "read" to "READFILE $note then say done.",
@@ -182,23 +191,47 @@ class DshBackendLiveIT {
             "command" to "RUNCMD $ran then say done.",
         )) {
             val before = asks.size
-            h.backend.sendPrompt(prompt, emptyList())
-            val turn = h.turn(120_000, approve)
+            val wireStart = h.lines.size
+            h.backend.sendPrompt("$prompt If permission is rejected, stop; do not retry or use another tool.", emptyList())
+            val turn = h.turn(120_000, reject)
+            assertNotNull(turn.result, "$label never settled")
+            // DSH deliberately hides live tool cards; inspect the real ACP result, not an event
+            // the backend does not promise to emit. History rendering is verified separately.
+            if (label == "read") assertTrue(h.lines.drop(wireStart).any {
+                !it.outbound && "\"tool_call_update\"" in it.text && "mango" in it.text && "\"completed\"" in it.text
+            }, "read-only must still allow reading the file")
             val settled = h.lines.filter {
                 !it.outbound && "\"tool_call_update\"" in it.text && ("\"completed\"" in it.text || "\"failed\"" in it.text)
             }.lastOrNull()?.text
-            println("[dsh-live] plan $label: asks=${asks.drop(before)} turnError=${turn.result?.isError} settled=${settled?.take(400)}")
+            println("[dsh-live] plan $label: asks=${asks.drop(before)} turnError=${turn.result.isError} settled=${settled?.take(400)}")
         }
         println("[dsh-live] plan: written exists=${written.toFile().exists()} command ran=${ran.toFile().exists()} asks=$asks")
-        assertTrue(asks.isEmpty(), "read-only refuses by sandbox, it does not ask: $asks")
         assertTrue(!written.toFile().exists(), "plan let dsh write a file")
         assertTrue(!ran.toFile().exists(), "plan let dsh run a command that writes")
-        // the one way out of the sandbox is an explicit escalation — and that is the user's call
-        h.backend.sendPrompt("BASHME: run the shell command `echo approved-run`, then say done.", emptyList())
-        val escalation = h.turn(120_000, approve)
-        h.dump("plan")
+        val escalate = escalationPrompt(escalated)
+        asks.clear()
+        h.backend.sendPrompt(escalate, emptyList())
+        val denied = h.turn(120_000, reject)
+        assertNotNull(denied.result, "rejected escalation never settled")
+        assertEquals(listOf("bash"), asks, "explicit escalation must ask")
+        assertTrue(!escalated.toFile().exists(), "rejected escalation must not write")
+
+        // A fresh session isolates the allow branch. Real models correctly remember the rejection
+        // and may refuse to ask again for the exact operation in the same conversation.
+        val allowing = launch(DshBackend(null), AgentSpec(workdir = workdir, mode = PermissionMode.PLAN), "plan-allow")
+        assertNotNull(allowing.await<AgentEvent.SessionInit>(60_000))
+        asks.clear()
+        allowing.backend.sendPrompt(escalate, emptyList())
+        val escalation = allowing.turn(120_000) {
+            asks += it.toolName
+            assertTrue(!escalated.toFile().exists(), "the command ran before approval")
+            allowing.backend.respondPermission(it.requestId, true, false, it.input, null, null)
+        }
+        h.dump("plan"); allowing.dump("plan-allow")
         println("[dsh-live] plan escalation: asks=$asks turnError=${escalation.result?.isError}")
-        assertEquals(1, asks.size, "an escalation under plan must ask: $asks")
+        assertEquals(listOf("bash"), asks, "an escalation under plan must ask")
+        assertTrue(escalation.result?.isError == false)
+        assertEquals("approved-run", escalated.toFile().readText().trim(), "approved command must run")
     }
 
     /** Launch-time model/effort land BEFORE the opening prompt is written, even when the prompt was sent before
@@ -234,6 +267,15 @@ class DshBackendLiveIT {
         assertTrue(first.turn().result?.isError == false)
         first.close(); harnesses.remove(first)
 
+        // Read what the real CLI persisted, including its compressed transcript generation. The ACP
+        // resume itself does not replay history; Pairlet must discover and render the disk separately.
+        val persisted = assertNotNull(DshTranscriptScanner.find(sid, workdir.toString()))
+        val history = DshTranscriptReplay.slice(persisted.file, null)
+        assertEquals("complete", history.quality, history.readError)
+        assertTrue(history.messages.any {
+            it.role == dev.ccpocket.protocol.ChatRole.ASSISTANT && it.text.contains("first-turn")
+        }, "the persisted first reply was lost")
+
         val h = launch(DshBackend(null), AgentSpec(workdir = workdir, resumeId = sid), "resume-b")
         val before = ArrayList<AgentEvent>()
         val init = h.await<AgentEvent.SessionInit>(60_000, before)
@@ -243,44 +285,66 @@ class DshBackendLiveIT {
         val turn = h.turn()
         h.dump("resume"); h.timings("resume")
         assertTrue(turn.result?.isError == false && turn.text.contains("resumed-ok"), "after resume: ${turn.text}")
+        h.close(); harnesses.remove(h)
+        val resumedFile = assertNotNull(DshTranscriptScanner.find(sid, workdir.toString())).file
+        val resumedHistory = DshTranscriptReplay.slice(resumedFile, null)
+        assertEquals("complete", resumedHistory.quality, resumedHistory.readError)
+        for (reply in listOf("first-turn", "resumed-ok")) {
+            assertTrue(resumedHistory.messages.any {
+                it.role == dev.ccpocket.protocol.ChatRole.ASSISTANT && it.text.contains(reply)
+            }, "the persisted reply $reply was lost after resume")
+        }
     }
 
     @Test
-    fun approval_usage_and_cancel() = runBlocking {
+    fun approval_usage_and_cancel_pending_approval() = runBlocking {
         val backend = DshBackend(null)
+        // workspace-write also grants OS temp directories. Use the isolated test home instead,
+        // outside both the session workspace and OS temp, and remove only our own generated directory.
+        val testHome = java.nio.file.Files.createDirectories(java.nio.file.Path.of(System.getProperty("user.home")))
+        val outside = createTempDirectory(testHome, "dsh-live-outside").also { workdirs.add(it) }
+        val approvedFile = outside.resolve("approved.txt")
+        val cancelledFile = outside.resolve("cancelled.txt")
         val h = launch(backend, AgentSpec(workdir = scratch()), "approve")
         awaitEvent<AgentEvent.SessionInit>(h.events, 60_000)
         val asks = ArrayList<AgentEvent.ControlRequest>()
         // dsh asks only for an escalation out of the sandbox; the scripted model requests one
-        backend.sendPrompt(
-            "BASHME: run `echo approved-run` with the bash tool using sandbox_permissions=danger-full-access " +
-                "(justification: probe), then say done.",
-            emptyList(),
-        )
-        val approved = h.turn { asks += it; backend.respondPermission(it.requestId, true, true, it.input, null, null) }
+        backend.sendPrompt(escalationPrompt(approvedFile), emptyList())
+        val approved = h.turn {
+            asks += it
+            assertTrue(!approvedFile.toFile().exists(), "write happened before approval")
+            backend.respondPermission(it.requestId, true, true, it.input, null, null)
+        }
         assertTrue(approved.result?.isError == false, "approval turn: ${approved.text}")
         assertEquals(1, asks.size, "expected exactly one permission ask")
+        assertEquals("approved-run", approvedFile.toFile().readText().trim())
         val answer = h.lines.single { it.outbound && it.method == null && it.text.contains("optionId") }.text
         assertTrue(answer.contains("\"allow-once\""), "remember must still answer dsh's only allow option: $answer")
         val usage = approved.events.filterIsInstance<AgentEvent.AssistantUsage>()
         val window = approved.events.filterIsInstance<AgentEvent.RuntimeMeta>().mapNotNull { it.contextWindow }
         assertTrue(usage.isNotEmpty() && window.isNotEmpty(), "no usage_update reached the events: ${approved.events}")
 
-        backend.sendPrompt("SLOW: count slowly from 1 to 40, one number per line. Do not use any tool.", emptyList())
-        // dsh sends a message's text in ONE chunk when it ends, so there is no first chunk to wait for
-        kotlinx.coroutines.delay(3_000)
+        // Hold the next turn at an actual approval boundary. A model can finish "count slowly"
+        // before a fixed delay elapses; that tested response speed rather than cancellation.
+        backend.sendPrompt(escalationPrompt(cancelledFile), emptyList())
+        assertNotNull(h.await<AgentEvent.ControlRequest>(60_000), "no pending approval to cancel")
         assertTrue(h.outbound("session/prompt").size == 2 && h.lines.none { !it.outbound && it.id == h.outbound("session/prompt")[1].id && it.method == null },
-            "the slow turn ended before the cancel")
+            "the approval turn ended before the cancel")
         val t0 = System.nanoTime()
         backend.interrupt()
         val cancelled = h.turn(30_000)
         val ms = (System.nanoTime() - t0) / 1_000_000
-        val slow = h.outbound("session/prompt")[1]
-        val stop = h.lines.firstOrNull { !it.outbound && it.method == null && it.id == slow.id }?.text
+        val interrupted = h.outbound("session/prompt")[1]
+        val stop = h.lines.firstOrNull { !it.outbound && it.method == null && it.id == interrupted.id }?.text
         h.dump("approve"); h.timings("approve")
         println("[dsh-live] approve: ask=${asks.map { it.toolName to it.input }} answer=$answer usage=${usage.last()} " +
             "window=${window.last()}; cancel settled in $ms ms with $stop")
         assertTrue(cancelled.result != null && stop?.contains("cancelled") == true, "cancel: $stop")
+        assertTrue(!cancelledFile.toFile().exists(), "cancelled command must not write")
+        backend.sendPrompt("Reply with exactly: after-cancel. Do not use any tool.", emptyList())
+        val next = h.turn()
+        assertTrue(next.result?.isError == false && next.text.contains("after-cancel"),
+            "the session must remain usable after cancelling an approval")
     }
 
     /**

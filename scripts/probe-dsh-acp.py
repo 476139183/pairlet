@@ -28,7 +28,7 @@ Writes dsh-acp-probe-<ts>.jsonl in the workdir (default: a fresh temp dir) and p
 Requires dsh >= 0.1.2-rc.1 and DeepSeek credentials ($DEEPSEEK_API_KEY or ~/.dsh/.credentials.yaml).
 Run this after EVERY dsh upgrade — protocol drift lands here first.
 """
-import json, os, subprocess, sys, tempfile, threading, time
+import json, os, re, subprocess, sys, tempfile, threading, time
 
 DSH = os.environ.get("CC_POCKET_DSH_BIN") or "dsh"
 CWD = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else tempfile.mkdtemp(prefix="dsh-acp-probe-")
@@ -212,9 +212,21 @@ findings["cancel"] = a.results.get(long_id)
 opts = (new.get("result") or {}).get("configOptions") or (new.get("result") or {}).get("config") or []
 findings["config_options_at_new"] = opts
 option_id, option_value = None, None
+
+
+def option_values(items):
+    """ACP select options can be grouped; preserve each opaque wire value verbatim."""
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, dict):
+            if "options" in item:
+                yield from option_values(item["options"])
+            elif "value" in item:
+                yield item["value"]
+
+
 for opt in opts if isinstance(opts, list) else []:
-    if opt.get("id") in ("model", "reasoning_effort") and opt.get("availableValues"):
-        values = [v.get("id") if isinstance(v, dict) else v for v in opt["availableValues"]]
+    if opt.get("id") in ("model", "reasoning_effort"):
+        values = list(option_values(opt.get("options")))
         current = opt.get("currentValue")
         pick = next((v for v in values if v != current), None)
         if pick:
@@ -222,9 +234,14 @@ for opt in opts if isinstance(opts, list) else []:
             break
 if option_id:
     r = a.call("session/set_config_option",
-               {"sessionId": sid, "optionId": option_id, "value": option_value}, timeout=60)
+               {"sessionId": sid, "configId": option_id, "value": option_value}, timeout=60)
     show("7. set_config_option(%s=%s)" % (option_id, option_value), r)
     findings["set_config_option"] = r
+    reported = (r.get("result") or {}).get("configOptions") or []
+    findings["config_write_verified"] = any(
+        opt.get("id") == option_id and opt.get("currentValue") == option_value for opt in reported
+    )
+    print("config write read-back verified:", findings["config_write_verified"])
 else:
     print("\n=== 7. set_config_option SKIPPED — no switchable option advertised at session/new")
 
@@ -251,15 +268,14 @@ home = os.environ.get("DSH_HOME") or os.path.expanduser("~/.dsh")
 store = os.path.join(home, "sessions")
 hit = None
 for root, _dirs, files in os.walk(store):
+    if os.path.basename(root) != sid:
+        continue
     for f in files:
-        if not (f.startswith("session.jsonl") or f.endswith(".jsonl") or f.endswith(".zstd")):
+        if not re.fullmatch(r"session(?:\.v\d+)?\.jsonl(?:\.zstd)?", f):
             continue
         path = os.path.join(root, f)
-        if os.path.getmtime(path) > time.time() - 3600 and sid.replace("/", "-")[:8] in root:
-            hit = path
-if hit is None:  # fall back to the newest file under the store
-    candidates = [os.path.join(r, f) for r, _d, fs in os.walk(store) for f in fs]
-    hit = max(candidates, key=os.path.getmtime) if candidates else None
+        hit = path
+# Never substitute an unrelated user's newest session or a lock file for a missing probe transcript.
 print("\n=== 9. on-disk transcript:", hit)
 findings["transcript_path"] = hit
 
