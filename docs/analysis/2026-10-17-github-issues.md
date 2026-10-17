@@ -55,7 +55,7 @@ v4 保留人类／助手消息与 `surfaceOp` 范围语义；工具结果改为 
 
 上述 5 个真实连接场景，以及推送登记、取消、窗口拖动、模型滚动的 41 项定向回归已通过。推送 token 在测试专用平台对象内注入，避免影响同一测试进程的其他配对。
 
-新增 `DirectEstablishBudgetIosTest` 在 iOS 模拟器中使用真正的 Darwin 网络引擎，覆盖 WebSocket 升级前黑洞的总预算和调用者取消；不将 JVM CIO 引擎结果替代 Darwin 结果。真实 iPhone 的蜂窝资格预检与 Wi-Fi 来回切换仍需单独验收。已连接设备安装的是 2.5.0（build 28）。
+新增 `DirectEstablishBudgetIosTest` 在 iOS 模拟器中使用真正的 Darwin 网络引擎，覆盖 WebSocket 升级前黑洞的总预算和调用者取消；不将 JVM CIO 引擎结果替代 Darwin 结果。真实 iPhone 的蜂窝资格预检与 Wi-Fi 来回切换仍需单独验收。2026-10-18 已安装本分支新编译的本地 Debug 包，版本标签仍为 2.5.0（build 28）；以本次构建、二进制新鲜度与安装回执区分旧包，不以相同版本标签证明更新。
 
 ## 本次验证与安装结果
 
@@ -67,7 +67,7 @@ v4 保留人类／助手消息与 `surfaceOp` 范围语义；工具结果改为 
 - desktop 主代码与测试编译通过；连接／推送／窗口／模型菜单定向 41 项全部通过，全套报告 2,597 项、0 失败。未开启可选的真实 daemon Live 测试；该入口自行打印跳过并返回，不等于已完成真实安装包验收。
 - iOS 模拟器：207 项、0 失败。额外直接运行 Darwin 两项预算测试通过：400ms 预算的黑洞用例耗时 421ms，取消用例耗时 216ms（包括主动等待 200ms）。原始 Gradle XML 的单项时间均为 0，耗时取直接运行的原生测试输出。
 - iPhone 真机 arm64 完整不签名 Debug 构建通过（`xcodebuild ... CODE_SIGNING_ALLOWED=NO build`）。本地缺少 Firebase 配置，已按仓库现有预览构建流程复制占位模板，结构检查通过；该包 Firebase 遥测关闭，不用于验收其云端上报。
-- iPhone 签名构建被环境阻挡：Xcode 报 `No Accounts`，现有通配描述文件不含 Push Notifications 与 `aps-environment` 权限。尚未安装新包，用户已表示正在恢复 Xcode 开发者账号。
+- iPhone 签名问题已解除：账号恢复后命令行一度仍报 `No Accounts`，在 Xcode 项目的 Signing & Capabilities 完成自动签名同步，取得包含目标设备和 development 推送权限的专用描述文件。完整签名构建成功，`codesign --verify --deep --strict` 与二进制新鲜度检查通过；新包已安装并启动。没有移除推送权限来绕过签名。
 - 已通过 `scripts/update-local-daemon-detached.sh` 更新本机 daemon；会话检查未阻挡，更新后进程数为 1、relay socket 数为 1。
 - 尚未对外发版或关闭 issue；Windows 及 iPhone 的待验收项不能由本地自动化结果代替。
 
@@ -82,6 +82,6 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 
 用户已同意在本地测试完成后配合 iPhone Wi-Fi／蜂窝切换；真实 Windows／DSH Desktop 验收及发布另外取证。
 
-真机测试准备时还需启用本机 daemon 的局域网直连：当前实测 8765 只监听 `127.0.0.1`，并非历史文档中的另一台已开启 LAN 的环境。签名装机完成后，按会话检查与单实例更新流程准备监听，再测试蜂窝 relay 与 Wi-Fi 直连之间的切换。
+本机已通过 `config --direct-connect lan` 与仓库更新脚本开启局域网直连，会话检查未阻挡；8765 监听所有接口，8799 仍只监听回环。更新后进程数为 1、relay socket 数为 1。新包启动后已观察到 relay 握手及随后直连 E2E 建立；用户切网及消息恢复的完整验收仍待回传。
 
-修复已保存为本地提交 `9f5472ae`（分支 `codex/verify-issues-403-409`）。GitHub HTTPS 无可用凭据，SSH 返回 `Permission denied (publickey)`，尚未推送或创建 PR；用户已表示正在配置 GitHub 登录。
+修复提交 `9f5472ae` 与核验记录已推送到 `codex/verify-issues-403-409`，创建草稿 [PR #410](https://github.com/heypandax/pairlet/pull/410)。PR 仅引用四个 issue，不设置自动关单；尚未合并或对外发版。
