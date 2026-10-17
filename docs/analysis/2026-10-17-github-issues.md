@@ -2,7 +2,7 @@
 
 本次从 GitHub API 读取全部 16 个 open issue 及评论，核对本地代码、远端 `main`（均为 `c842a0003f8ab56270885c36f96a5da753deedf8`）与 `v2.5.0`。以下是本次核查结果；历史评论中的承诺不作为新任务授权。
 
-本次继续核验 #403、#404、#406、#409。JDK 17 已安装并通过官方 SHA-256 校验，Gradle 9.4.1 已启动；daemon、desktop 与 iOS 模拟器回归通过。本机 daemon 已更新并通过单实例与 relay 连接校验，尚未对外发布或修改 GitHub issue 状态。用户明确将 #406 的 Windows 真机验收交给反馈用户，复测前保持 open。
+本次继续核验 #403、#404、#406、#409。JDK 17 已安装并通过官方 SHA-256 校验，Gradle 9.4.1 已启动；daemon、desktop 与 iOS 模拟器回归通过。本机 daemon 已更新并通过单实例与 relay 连接校验，尚未对外发布。2026-10-18 维护者在新 Debug 包完成 iPhone Wi-Fi／蜂窝来回复测，结合连接日志与自动化结果验收 #403、#404 并关闭。用户明确将 #406 的 Windows 真机验收交给反馈用户，复测前保持 open。
 
 ## 全量分诊
 
@@ -13,8 +13,8 @@
 | [#407 新 Codex 模型不可选](https://github.com/heypandax/pairlet/issues/407) | 动态目录改造 `e5051ff3` 已包含在 `v2.5.0`，不是简单漏更新静态型号表。现有代码按 CLI 的执行 ID 展示，支持刷新、分页和失败回退。 | 根因未确认。需用户实际运行 daemon 版本、模型菜单来源／错误提示，以及同账号同项目的 CLI `model/list` 是否包含目标执行 ID。不要凭显示名称猜 ID 或硬编码追加。 |
 | [#406 Windows 模型菜单与窗口](https://github.com/heypandax/pairlet/issues/406) | `ModelPopover` 的普通 Column 无滚动，长目录不可达；拖动在越过阈值后才记录锚点，丢失第一段位移，标题可拖区域也只有文本行高。尚无反馈者 Windows 环境复现证据。 | 已补菜单限高和滚动、按下时记录拖动锚点、Windows 38dp 标题拖动区域；自动化覆盖后由反馈用户复测，整单保持 open。 |
 | [#405 App 内局域网开关](https://github.com/heypandax/pairlet/issues/405) | 已被 [D6](../DECLINED-REQUIREMENTS.md) 后续决定否决；issue 正文仍是旧方案。 | 建议按不计划实施结案，引用 D6。加固后默认开启是另一个需要独立评审的方向，不在本次重启。 |
-| [#404 relay 空闲回切直连](https://github.com/heypandax/pairlet/issues/404) | 初版已进入 `v2.5.0`，但本轮真实 WebSocket 测试发现重挂消息误入旧 relay 队列，以及推送短连接与回退 relay 重叠。 | 已调整首批消息与推送登记时序，5 个真实连接场景及 desktop 全套通过。继续 iPhone 验证，保持 open。 |
-| [#403 直连尝试总预算](https://github.com/heypandax/pairlet/issues/403) | 已有总预算与拨号前资格预检实现（`db6e8c1d`），与 #404 共用选路方案。 | 保持待验收；重点检查黑洞地址、总预算、冷却和 relay 回退，不能仅据代码存在关闭。 |
+| [#404 relay 空闲回切直连](https://github.com/heypandax/pairlet/issues/404) | 初版已进入 `v2.5.0`，但本轮真实 WebSocket 测试发现重挂消息误入旧 relay 队列，以及推送短连接与回退 relay 重叠。 | 已调整首批消息与推送登记时序，5 个真实连接场景及 desktop 全套通过。iPhone 真机来回切网、会话恢复与消息发送已由维护者确认，日志一致；已关闭。 |
+| [#403 直连尝试总预算](https://github.com/heypandax/pairlet/issues/403) | 已有总预算与拨号前资格预检实现（`db6e8c1d`），与 #404 共用选路方案。 | Darwin 黑洞预算与取消、资格预检和回退回归通过；维护者确认真机蜂窝连接与消息正常，已关闭。真机未记录拨号起点，不能把日志表述为实测三秒内完成。 |
 | [#402 提问卡遮住正文](https://github.com/heypandax/pairlet/issues/402) | 反馈者在 2026-10-07 明确确认新版本已修复，卡片可收起、正文可看全。 | **具备结案证据，建议关闭为 completed。** 本次未重复编码。 |
 | [#400 Codex 压缩后退出](https://github.com/heypandax/pairlet/issues/400) | 原反馈为 daemon 1.3.1；维护者已说明新版走 Codex 压缩接口，并请其升级复测，暂无后续反馈。 | 等用户在新版复测；若失败，取精确 CLI／daemon 版本与当次日志。 |
 | [#391 Kimi 后台任务状态](https://github.com/heypandax/pairlet/issues/391) | 评论记录修复已随 2.3.0 发布；尚无反馈者验收。 | 保持等待复测，不重复实现任务记录轮询。 |
@@ -55,7 +55,7 @@ v4 保留人类／助手消息与 `surfaceOp` 范围语义；工具结果改为 
 
 上述 5 个真实连接场景，以及推送登记、取消、窗口拖动、模型滚动的 41 项定向回归已通过。推送 token 在测试专用平台对象内注入，避免影响同一测试进程的其他配对。
 
-新增 `DirectEstablishBudgetIosTest` 在 iOS 模拟器中使用真正的 Darwin 网络引擎，覆盖 WebSocket 升级前黑洞的总预算和调用者取消；不将 JVM CIO 引擎结果替代 Darwin 结果。真实 iPhone 的蜂窝资格预检与 Wi-Fi 来回切换仍需单独验收。2026-10-18 已安装本分支新编译的本地 Debug 包，版本标签仍为 2.5.0（build 28）；以本次构建、二进制新鲜度与安装回执区分旧包，不以相同版本标签证明更新。
+新增 `DirectEstablishBudgetIosTest` 在 iOS 模拟器中使用真正的 Darwin 网络引擎，覆盖 WebSocket 升级前黑洞的总预算和调用者取消；不将 JVM CIO 引擎结果替代 Darwin 结果。真实 iPhone 的 Wi-Fi／蜂窝来回切换已完成本轮功能验收；精确预算耗时来自原生引擎测试，不从真机握手时刻反推拨号耗时。2026-10-18 已安装本分支新编译的本地 Debug 包，版本标签仍为 2.5.0（build 28）；以本次构建、二进制新鲜度与安装回执区分旧包，不以相同版本标签证明更新。
 
 ## 本次验证与安装结果
 
@@ -69,7 +69,7 @@ v4 保留人类／助手消息与 `surfaceOp` 范围语义；工具结果改为 
 - iPhone 真机 arm64 完整不签名 Debug 构建通过（`xcodebuild ... CODE_SIGNING_ALLOWED=NO build`）。本地缺少 Firebase 配置，已按仓库现有预览构建流程复制占位模板，结构检查通过；该包 Firebase 遥测关闭，不用于验收其云端上报。
 - iPhone 签名问题已解除：账号恢复后命令行一度仍报 `No Accounts`，在 Xcode 项目的 Signing & Capabilities 完成自动签名同步，取得包含目标设备和 development 推送权限的专用描述文件。完整签名构建成功，`codesign --verify --deep --strict` 与二进制新鲜度检查通过；新包已安装并启动。没有移除推送权限来绕过签名。
 - 已通过 `scripts/update-local-daemon-detached.sh` 更新本机 daemon；会话检查未阻挡，更新后进程数为 1、relay socket 数为 1。
-- 尚未对外发版或关闭 issue；Windows 及 iPhone 的待验收项不能由本地自动化结果代替。
+- #403、#404 已在真机功能验收后关闭；#406、#409 保持 open。尚未合并或对外发版，Windows 目标环境验收不能由本地自动化结果代替。
 
 本机验证命令（先选择已安装的 JDK 17）：
 
@@ -80,8 +80,8 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 ./gradlew :mobile:composeApp:iosSimulatorArm64Test
 ```
 
-用户已同意在本地测试完成后配合 iPhone Wi-Fi／蜂窝切换；真实 Windows／DSH Desktop 验收及发布另外取证。
+用户已完成 iPhone Wi-Fi／蜂窝切换并明确反馈“三步都正常，已完成”；真实 Windows／DSH Desktop 验收及发布另外取证。
 
-本机已通过 `config --direct-connect lan` 与仓库更新脚本开启局域网直连，会话检查未阻挡；8765 监听所有接口，8799 仍只监听回环。更新后进程数为 1、relay socket 数为 1。新包启动后已观察到 relay 握手及随后直连 E2E 建立；用户切网及消息恢复的完整验收仍待回传。
+本机已通过 `config --direct-connect lan` 与仓库更新脚本开启局域网直连，会话检查未阻挡；8765 监听所有接口，8799 仍只监听回环。更新后进程数为 1、relay socket 数为 1。新包启动后已观察到 relay 握手及随后直连 E2E 建立。真机复测日志（2026-10-18，UTC+08:00）记录 01:36:50 relay 握手、01:37:04 relay 打开会话、01:37:15 relay 发送消息，随后 01:37:38 直连建立并重挂当前会话、01:38:03 经直连发送消息；与用户三步均正常的反馈一致。该时间线不包含用户切换网络的精确起点，不据此宣称真机拨号耗时已定量验证。
 
-修复提交 `9f5472ae` 与核验记录已推送到 `codex/verify-issues-403-409`，创建草稿 [PR #410](https://github.com/heypandax/pairlet/pull/410)。PR 仅引用四个 issue，不设置自动关单；尚未合并或对外发版。
+修复提交 `9f5472ae` 与核验记录已推送到 `codex/verify-issues-403-409`，创建草稿 [PR #410](https://github.com/heypandax/pairlet/pull/410)。PR 仅引用四个 issue，不设置自动关单；#403、#404 按本轮验收结果手动关闭，#406、#409 待反馈者目标环境确认。尚未合并或对外发版。
