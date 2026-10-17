@@ -13,7 +13,7 @@
 | [#407 新 Codex 模型不可选](https://github.com/heypandax/pairlet/issues/407) | 动态目录改造 `e5051ff3` 已包含在 `v2.5.0`，不是简单漏更新静态型号表。现有代码按 CLI 的执行 ID 展示，支持刷新、分页和失败回退。 | 根因未确认。需用户实际运行 daemon 版本、模型菜单来源／错误提示，以及同账号同项目的 CLI `model/list` 是否包含目标执行 ID。不要凭显示名称猜 ID 或硬编码追加。 |
 | [#406 Windows 模型菜单与窗口](https://github.com/heypandax/pairlet/issues/406) | `ModelPopover` 的普通 Column 无滚动，长目录不可达；拖动在越过阈值后才记录锚点，丢失第一段位移，标题可拖区域也只有文本行高。尚无反馈者 Windows 环境复现证据。 | 已补菜单限高和滚动、按下时记录拖动锚点、Windows 38dp 标题拖动区域；自动化覆盖后由反馈用户复测，整单保持 open。 |
 | [#405 App 内局域网开关](https://github.com/heypandax/pairlet/issues/405) | 已被 [D6](../DECLINED-REQUIREMENTS.md) 后续决定否决；issue 正文仍是旧方案。 | 建议按不计划实施结案，引用 D6。加固后默认开启是另一个需要独立评审的方向，不在本次重启。 |
-| [#404 relay 空闲回切直连](https://github.com/heypandax/pairlet/issues/404) | 初版已进入 `v2.5.0`，但本轮真实 WebSocket 测试发现重挂消息误入旧 relay 队列，以及推送短连接与回退 relay 重叠。 | 已调整首批消息与推送登记时序，5 个真实连接场景通过。继续全量及 iPhone 验证，保持 open。 |
+| [#404 relay 空闲回切直连](https://github.com/heypandax/pairlet/issues/404) | 初版已进入 `v2.5.0`，但本轮真实 WebSocket 测试发现重挂消息误入旧 relay 队列，以及推送短连接与回退 relay 重叠。 | 已调整首批消息与推送登记时序，5 个真实连接场景及 desktop 全套通过。继续 iPhone 验证，保持 open。 |
 | [#403 直连尝试总预算](https://github.com/heypandax/pairlet/issues/403) | 已有总预算与拨号前资格预检实现（`db6e8c1d`），与 #404 共用选路方案。 | 保持待验收；重点检查黑洞地址、总预算、冷却和 relay 回退，不能仅据代码存在关闭。 |
 | [#402 提问卡遮住正文](https://github.com/heypandax/pairlet/issues/402) | 反馈者在 2026-10-07 明确确认新版本已修复，卡片可收起、正文可看全。 | **具备结案证据，建议关闭为 completed。** 本次未重复编码。 |
 | [#400 Codex 压缩后退出](https://github.com/heypandax/pairlet/issues/400) | 原反馈为 daemon 1.3.1；维护者已说明新版走 Codex 压缩接口，并请其升级复测，暂无后续反馈。 | 等用户在新版复测；若失败，取精确 CLI／daemon 版本与当次日志。 |
@@ -60,13 +60,14 @@ v4 保留人类／助手消息与 `surfaceOp` 范围语义；工具结果改为 
 ## 本次验证与安装结果
 
 - `git diff --check`：通过。
-- `python3 scripts/check-repository-content.py`：通过（检查现有 Git index，不代表新增未暂存文件已经进入 index）。
+- `python3 scripts/check-repository-content.py`：通过，提交前已检查包含本轮新增文件的 Git index。
 - JDK 17 与 Android SDK 已安装，Gradle 9.4.1 已通过官方校验并启动。此前无 JDK 的环境问题已解除。
 - 首次构建中 JUnit、JediTerm 等依赖下载遇到 TLS 握手中断；从官方源补齐并校验后继续运行。
 - daemon：2,784 项中 2,766 项通过、18 项按环境条件跳过，0 失败；包括本轮 DSH v4 与既有 `OutboxRetireTest`。
 - desktop 主代码与测试编译通过；连接／推送／窗口／模型菜单定向 41 项全部通过，全套报告 2,597 项、0 失败。未开启可选的真实 daemon Live 测试；该入口自行打印跳过并返回，不等于已完成真实安装包验收。
 - iOS 模拟器：207 项、0 失败。额外直接运行 Darwin 两项预算测试通过：400ms 预算的黑洞用例耗时 421ms，取消用例耗时 216ms（包括主动等待 200ms）。原始 Gradle XML 的单项时间均为 0，耗时取直接运行的原生测试输出。
-- iPhone 本地 Debug 包正在构建，安装及真机切网结果待回填。
+- iPhone 真机 arm64 完整不签名 Debug 构建通过（`xcodebuild ... CODE_SIGNING_ALLOWED=NO build`）。本地缺少 Firebase 配置，已按仓库现有预览构建流程复制占位模板，结构检查通过；该包 Firebase 遥测关闭，不用于验收其云端上报。
+- iPhone 签名构建被环境阻挡：Xcode 报 `No Accounts`，现有通配描述文件不含 Push Notifications 与 `aps-environment` 权限。尚未安装新包，用户已表示正在恢复 Xcode 开发者账号。
 - 已通过 `scripts/update-local-daemon-detached.sh` 更新本机 daemon；会话检查未阻挡，更新后进程数为 1、relay socket 数为 1。
 - 尚未对外发版或关闭 issue；Windows 及 iPhone 的待验收项不能由本地自动化结果代替。
 
@@ -80,3 +81,7 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 ```
 
 用户已同意在本地测试完成后配合 iPhone Wi-Fi／蜂窝切换；真实 Windows／DSH Desktop 验收及发布另外取证。
+
+真机测试准备时还需启用本机 daemon 的局域网直连：当前实测 8765 只监听 `127.0.0.1`，并非历史文档中的另一台已开启 LAN 的环境。签名装机完成后，按会话检查与单实例更新流程准备监听，再测试蜂窝 relay 与 Wi-Fi 直连之间的切换。
+
+修复已保存为本地提交 `9f5472ae`（分支 `codex/verify-issues-403-409`）。GitHub HTTPS 无可用凭据，SSH 返回 `Permission denied (publickey)`，尚未推送或创建 PR；用户已表示正在配置 GitHub 登录。
