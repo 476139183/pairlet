@@ -68,6 +68,11 @@ jobs:
       - name: Use the placeholder google-services.json
         run: cp mobile/androidApp/google-services.json.template mobile/androidApp/google-services.json
 
+      - name: Verify App Store text limits
+        run: |
+          python3 scripts/test-appstore-content.py
+          python3 scripts/check-appstore-content.py --metadata-only
+
       - name: Test observability · protocol · daemon · relay, compile mobile (desktop and Android)
         run: ./gradlew --no-daemon :observability:jvmTest :observability-sentry:jvmTest :protocol:jvmTest :daemon:test :relay:test :mobile:composeApp:compileKotlinDesktop :mobile:androidApp:assembleDebug
 

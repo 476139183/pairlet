@@ -4,11 +4,13 @@
 
 | 任务 | 入口 |
 |---|---|
+| 2026-10-17 GitHub issue 核查与修复候选 | [全部 16 项分诊、DSH v4 与桌面菜单修复及验证限制](analysis/2026-10-17-github-issues.md) |
 | 了解架构、模块与开发指南 | [工程 Wiki](https://wiki.pairlet.org/) |
 | 管理本期 Issue 修复与交付 | [2026-09-13 本期任务管理](iterations/2026-09-13-issue-delivery.md) |
 | 交给 Claude Code 独立实施后续 Issue | [2026-09-14 任务目录与方案](iterations/2026-09-14-claude-code/README.md) |
 | 实施本轮八项 Issue 修复（不含 #352／#381／#342） | [2026-09-19 批次规划与逐项方案](iterations/2026-09-19-claude-code/README.md) |
 | 2.1.2 全平台发布与验收 | [2026-09-22 发布记录](iterations/2026-09-22-release/RELEASE-2.1.2.md) |
+| 2.6.0 发布与验收 | [2026-10-18 发布记录](iterations/2026-10-18-release/RELEASE-2.6.0.md) |
 | 2.5.0 发布与验收 | [2026-10-06 发布记录](iterations/2026-10-06-release/RELEASE-2.5.0.md) |
 | 2.4.0 全平台发布与验收 | [2026-10-06 发布记录](iterations/2026-10-06-release/RELEASE-2.4.0.md) |
 | 2.3.0 全平台发布与验收 | [2026-10-05 发布记录](iterations/2026-10-05-release/RELEASE-2.3.0.md) |

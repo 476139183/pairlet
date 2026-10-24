@@ -470,6 +470,21 @@ TestFlight 公测链接。只有要把新 build 附到另一个仍开放的版�
 
 仅验证云签名构建时，在明确的待验收分支上触发同一工作流并传 `verify_only=true`。该模式完成归档、符号匹配、生产 IPA 导出与签名检查，并输出 IPA SHA-256；跳过 Sentry 符号上传、ASC 上传、审核及 TestFlight 分发。构建通过仅证明包的签名配置，不证明真机通知恢复。
 
+### 已上传 build 的提审恢复
+
+如果 IPA 已处理为 `VALID`，仅因审核备注或其他商店文案失败，先修正并检查文案，
+从包含修正的提交运行 `ios-submit-existing.yml`，显式指定原版本和 build。例如：
+
+```bash
+gh workflow run ios-submit-existing.yml --ref main \
+  -f version=2.6.0 -f build_number=71 \
+  -f automatic_release=true -f distribute_testflight=true
+```
+
+该流程会校验版本锁步、目标草稿、年龄分级及指定 build 的 `VALID` 状态，然后同步文案、
+绑定该 build 并提交正式审核，按参数分发 TestFlight。它不归档、不重新上传二进制，也不修改
+既有发布标签；提交后回读 build、文案和发布方式。使用前确认本次授权包含正式提审与对应分发方式。
+
 ## 本地手动兜底
 
 1. **定版本（两处保持 lockstep）**：

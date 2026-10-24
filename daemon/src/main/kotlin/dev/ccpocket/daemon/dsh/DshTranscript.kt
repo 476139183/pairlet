@@ -29,11 +29,13 @@ import kotlin.io.path.isRegularFile
  *
  * LOGICAL FORMAT: line 1 is the session header `{type:"session", version, id, cwd, …}`. Released v0/v1
  * store scalar events and packed streaming deltas; v2/v3 embed those deltas in the assembled assistant
- * message. The four conversation event payloads retain their shapes. We render the human transcript,
+ * message. V4 lifts tool results into tool-role messages (see DshAsk.toolResults). We render the human transcript,
  * not a migrated model context, and never write or migrate DSH's persistence files.
  *
  * Source: deepseek-harness tag dsh-v0.1.5-rc.1, session-format-v0-to-v1 / v1-to-v2 / v2-to-v3 and
  * session/src/types.ts. Unknown generations and filename/header disagreement are refused (#376).
+ * V4 checked against the 0.2.0-rc.2 session and v3-to-v4 packages vendored by anywhere-labs/dsh-desktop
+ * (#409); human/assistant messages and surface ranges retain their V3 shapes.
  *
  * Parsing is defensive throughout: an unparseable line yields no row instead of an exception, because the
  * tail of a live transcript is expected to be ragged.
@@ -43,7 +45,7 @@ object DshTranscript {
     internal val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     /** Latest format whose human-transcript payloads this build has verified, plus all predecessors. */
-    const val SUPPORTED_VERSION = 3L
+    const val SUPPORTED_VERSION = 4L
 
     /** Hard ceiling on decompressed bytes we will hold for one session — a runaway/hostile file must not
      *  be able to exhaust the daemon heap just by being listed. */

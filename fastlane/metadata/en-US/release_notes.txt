@@ -1,11 +1,8 @@
 What's new in 2.6.1
 
-- Long conversations open faster: recent messages load first, with more history added as needed. Scrolling back no longer duplicates loaded history or new messages.
-- Images in history load as previews first. Tap an image to fetch the original, reducing the wait on slower connections.
-- More reliable connections: fewer unnecessary reconnects on slow networks. When you return to the same local network, Pairlet switches back to a direct connection while idle, keeping the current connection during transfers and replies.
-- A new + button at the top of a conversation lets you start another session in the current project.
-- Fixed Follow System always using dark mode. Appearance now follows your system setting.
-- More reliable approval and question notifications, even when another device is online.
-- Model lists appear from cache and refresh in the background, reducing waits and preventing older lists from replacing newer models.
+- Choose what happens after dictation: put the text in the composer, or enable correction before sending. Preview the text and highlighted changes; if correction fails or a change needs review, the text stays available for you to check.
+- Improved session recovery when switching between Wi-Fi and cellular networks. Fixed missing session content after returning to a local connection.
+- Fixed history loading for newer DeepSeek Harness sessions, preserving messages and tool results.
+- Cleaner session lists with fewer internal subtask records, and improved session grouping after a project is moved.
 
-Update Pairlet on your computer too for the full connection and history improvements.
+Update Pairlet on your computer too. Voice correction requires a compatible computer app and a configured agent. A disclosure explains data use before you first enable it.

@@ -99,9 +99,20 @@ internal object DshAsk {
      * (toolCallId → concatenated result text) for every block of a `tool/result` record. The nesting is
      * two levels deep and easy to get wrong: `data.message.content[]` are TOOL-RESULT blocks carrying
      * `toolCallId`, and each of those has its own `content[]` of `{type:"text", text}` parts.
+     * V4 instead puts toolCallId/isError on a role:"tool" message and text directly in its content.
      */
     fun toolResults(data: JsonObject?): List<DiskToolResult> {
-        val blocks = (data?.obj("message")?.get("content") as? JsonArray) ?: return emptyList()
+        val message = data?.obj("message") ?: return emptyList()
+        val blocks = (message["content"] as? JsonArray) ?: return emptyList()
+        if (message.str("role") == "tool") {
+            val callId = message.str("toolCallId")?.takeIf { it.isNotBlank() } ?: return emptyList()
+            // V4 requires both identities to agree; never attach a malformed result to another call.
+            val source = message.obj("source") ?: return emptyList()
+            if (source.str("kind") != "tool" || source.str("callId") != callId) return emptyList()
+            val text = blocks.mapNotNull { (it as? JsonObject)?.takeIf { p -> p.str("type") == "text" }?.str("text") }
+                .joinToString("")
+            return listOf(DiskToolResult(callId, text, (message["isError"] as? JsonPrimitive)?.booleanOrNull))
+        }
         return blocks.mapNotNull { el ->
             val block = el as? JsonObject ?: return@mapNotNull null
             val callId = block.str("toolCallId") ?: return@mapNotNull null

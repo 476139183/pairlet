@@ -255,8 +255,9 @@ object DshTranscriptReplay {
     /**
      * Migration changes physical line counts (v1 packs deltas; v2 embeds them; v3 inserts system rows).
      * The existing Long cursor is opaque to clients, so reserve its high bits for the generation and
-     * preserve legacy v0 line cursors exactly. A v0/v1/v2 cursor can never skip rows in a v3 read. The
-     * 64 MiB read bound keeps line numbers below 2^32, and v0–v3 cursors remain JS-safe integers.
+     * preserve legacy v0 line cursors exactly. A cursor from an older format can never skip rows in a
+     * newer generation. The 64 MiB read bound keeps line numbers below 2^32, and v0–v4 cursors remain
+     * JS-safe integers.
      */
     private const val CURSOR_STRIDE = 1L shl 32
     private fun cursor(version: Long, line: Long): Long = version * CURSOR_STRIDE + line

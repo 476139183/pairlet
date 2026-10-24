@@ -38,11 +38,22 @@ FORBIDDEN = (
 )
 # 2.0.0 (56) was rejected under Guideline 2.3.10 for an Android-only release note.
 OTHER_MOBILE_PLATFORMS = ("Android", "安卓")
+REVIEW_NOTES_LIMIT = 4000
 
 
 def fail(message: str) -> None:
     print(f"ERROR: {message}", file=sys.stderr)
     raise SystemExit(1)
+
+
+def validate_review_notes(path: Path) -> None:
+    if not path.is_file():
+        fail(f"missing review notes: {path}")
+    value = path.read_text(encoding="utf-8").strip()
+    if not value:
+        fail(f"empty review notes: {path}")
+    if len(value) > REVIEW_NOTES_LIMIT:
+        fail(f"{path} is {len(value)} characters; limit is {REVIEW_NOTES_LIMIT}")
 
 
 def png_dimensions(path: Path) -> tuple[int, int]:
@@ -73,6 +84,7 @@ def main() -> None:
         help="Validate text without requiring screenshots, previews, or ffprobe",
     )
     args = parser.parse_args()
+    validate_review_notes(METADATA / "review_information" / "notes.txt")
     public_text: list[str] = []
     for locale in LOCALES:
         directory = METADATA / locale
@@ -180,6 +192,7 @@ def main() -> None:
     print(
         f"App Store content OK: {len(LOCALES)} locales, "
         f"{len(LOCALES) * (len(LIMITS) + len(URL_FIELDS))} metadata fields, "
+        "review notes, "
         f"{media_summary}"
     )
 
