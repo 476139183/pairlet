@@ -1,4 +1,4 @@
-What's new in 2.5.0
+What's new in 2.6.1
 
 - Long conversations open faster: recent messages load first, with more history added as needed. Scrolling back no longer duplicates loaded history or new messages.
 - Images in history load as previews first. Tap an image to fetch the original, reducing the wait on slower connections.
