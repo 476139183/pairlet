@@ -170,7 +170,10 @@ class QuotaAgentRoutingTest {
             restarted.paired.value = binding
             restarted.connected.value = true
             restarted.quotaByAgent[AgentKind.CODEX] = first.quotaByAgent[AgentKind.CODEX]!!
-            restarted.redeemQuotaReset("card-b")
+            assertTrue(!restarted.redeemQuotaReset("card-b"), "a restored unknown attempt must not silently consume another selection")
+            assertTrue(sentRestarted.filterIsInstance<dev.ccpocket.protocol.RedeemQuotaReset>().isEmpty())
+            assertTrue(restarted.quotaResetPending)
+            assertTrue(restarted.retryQuotaReset(), "only an explicit retry may resume the original attempt")
             assertEquals(original, sentRestarted.filterIsInstance<dev.ccpocket.protocol.RedeemQuotaReset>().single())
             val (other, sentOther) = repo()
             other.paired.value = binding.copy(accountId = "$identity-other")

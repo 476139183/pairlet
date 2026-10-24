@@ -2331,5 +2331,5 @@
     <string name="quota_unavailable">暂时无法获取账号额度，请刷新重试。</string>
     <string name="quota_reset_expires">有效期至：%1$s</string>
     <string name="quota_reset_retry">重试确认兑换结果</string>
-    <string name="updates_daemon_controls_paused">电脑守护端正在更新，暂时无法发消息或执行控制操作。你仍可查看聊天记录，更新结束并恢复连接后即可继续。</string>
+    <string name="updates_daemon_controls_paused">电脑守护端正在更新，新消息和新会话已暂停。你仍可查看历史、处理已有任务的审批或问题，以及停止运行中的任务。</string>
 </resources>

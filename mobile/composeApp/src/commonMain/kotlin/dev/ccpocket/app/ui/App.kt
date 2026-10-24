@@ -361,7 +361,7 @@ fun App(scope: CoroutineScope) {
             PrivacyConsentScreen(onAgree = repo::acceptPrivacyConsent)
             return@WideLayoutScope
         }
-        val approvalAsk = repo.pendingAsk.value?.takeIf { !it.isQuestion && !repo.daemonControlsBlocked }
+        val approvalAsk = repo.pendingAsk.value?.takeIf { !it.isQuestion }
         // the double-tap guard (arrival times + card windows); the sheet and the question card share it
         dev.ccpocket.app.ui.approval.ProvideApprovalArrivalGuard(repo) {
         Surface(Modifier.fillMaxSize(), color = Tok.base) {
@@ -3325,7 +3325,7 @@ internal fun ChatScreen( // internal: rendered offscreen by ShowcaseRender (mark
             // stream above stays scrollable so the user can re-read context before answering.
             // While one of the card's text fields owns input, the composer hides (design ③).
             var cardOwnsInput by remember(repo.pendingAsk.value?.askId) { mutableStateOf(false) }
-            val questionAsk = repo.pendingAsk.value?.takeIf { it.isQuestion && !repo.daemonControlsBlocked }
+            val questionAsk = repo.pendingAsk.value?.takeIf { it.isQuestion }
             questionAsk?.let { ask ->
                 val skipMessage = stringResource(Res.string.question_skip_message)
                 QuestionCard(
@@ -3336,12 +3336,17 @@ internal fun ChatScreen( // internal: rendered offscreen by ShowcaseRender (mark
                 )
             }
             if (repo.daemonControlsBlocked) {
-                Text(
-                    stringResource(Res.string.updates_daemon_controls_paused),
-                    color = Tok.tx2, fontSize = 13.sp,
-                    modifier = Modifier.fillMaxWidth().background(Tok.surface)
+                Row(
+                    Modifier.fillMaxWidth().background(Tok.surface)
                         .windowInsetsPadding(WindowInsets.navigationBars).padding(16.dp),
-                )
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(Res.string.updates_daemon_controls_paused),
+                        color = Tok.tx2, style = tightCenter(13.sp), modifier = Modifier.weight(1f),
+                    )
+                    if (repo.streaming.value || repo.pendingAsk.value != null) StopButton { repo.cancelTurn() }
+                }
             } else if (questionAsk != null && cardOwnsInput) {
                 // composer yields while the card's field has the keyboard
             } else if (repo.observing.value) {

@@ -397,13 +397,13 @@ private fun CodexResetCards(repo: PocketRepository, now: Long) {
                 "${date.hour.toString().padStart(2, '0')}:${date.minute.toString().padStart(2, '0')}"
             Text(stringResource(Res.string.quota_reset_expires, stamp), color = Tok.muted, fontSize = 11.sp)
         }
-        TextButton(onClick = { selectedId = card.id; confirming = true }, enabled = !busy && !repo.quotaResetNeedsRefresh.value) {
+        TextButton(onClick = { selectedId = card.id; confirming = true }, enabled = repo.canRedeemQuotaReset) {
             Text(stringResource(Res.string.quota_reset_redeem), style = tightCenter(12.sp))
         }
     }
     // Null details means only the count is known. Let the backend select the next available card.
     if (summary.availableCount > 0 && summary.credits.isNullOrEmpty()) {
-        TextButton(onClick = { selectedId = null; confirming = true }, enabled = !busy && !repo.quotaResetNeedsRefresh.value) {
+        TextButton(onClick = { selectedId = null; confirming = true }, enabled = repo.canRedeemQuotaReset) {
             Text(stringResource(Res.string.quota_reset_redeem), style = tightCenter(12.sp))
         }
     }
@@ -418,7 +418,9 @@ private fun CodexResetCards(repo: PocketRepository, now: Long) {
         else -> null
     }
     message?.let { Text(stringResource(it), color = Tok.muted, fontSize = 12.sp) }
-    if (outcome == "unknown" && !busy) TextButton(onClick = { repo.redeemQuotaReset(selectedId) }) {
+    if (repo.quotaResetPending && !busy) TextButton(
+        onClick = { repo.retryQuotaReset() }, enabled = repo.canRetryQuotaReset,
+    ) {
         Text(stringResource(Res.string.quota_reset_retry), style = tightCenter(12.sp))
     }
     Spacer(Modifier.height(10.dp))
@@ -429,7 +431,7 @@ private fun CodexResetCards(repo: PocketRepository, now: Long) {
         confirmButton = { TextButton(onClick = {
             confirming = false
             repo.redeemQuotaReset(selectedId)
-        }, enabled = !busy && !repo.quotaResetNeedsRefresh.value) { Text(stringResource(Res.string.quota_reset_redeem)) } },
+        }, enabled = repo.canRedeemQuotaReset) { Text(stringResource(Res.string.quota_reset_redeem)) } },
         dismissButton = { TextButton(onClick = { confirming = false }) { Text(stringResource(Res.string.quota_reset_cancel)) } },
     )
 }

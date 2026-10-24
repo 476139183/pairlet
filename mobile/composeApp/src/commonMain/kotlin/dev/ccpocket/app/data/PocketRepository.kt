@@ -1304,7 +1304,9 @@ class PocketRepository(
         diagnosticsSupported = { daemonDiagnostics && paired.value?.role == BindingRole.OWNER && !demoMode.value },
         productDimensions = ::productDimensions,
         receiptExpired = { cid, pid -> promptOutcomes.receiptExpired(cid, pid, appIsForeground.value) },
-        responseExpired = { cid, pid, queued -> promptOutcomes.responseExpired(cid, pid, appIsForeground.value, queued) })
+        responseExpired = { cid, pid, queued -> promptOutcomes.responseExpired(cid, pid, appIsForeground.value, queued) },
+        handleLocalCommand = ::handleLocalSystemCommand,
+        controlsBlocked = { daemonControlsBlocked })
     val pendingImages = mutableStateListOf<PendingImage>() // photos staged in the composer (pre-send)
     val pendingFiles = mutableStateListOf<PendingFile>()   // files staged/uploading into the workspace inbox (issue #90)
     private var fileUploadJob: Job? = null                 // the chunk-send loop of the ONE Uploading file
@@ -3178,8 +3180,8 @@ class PocketRepository(
         // under the next machine's name would be a straight lie about a billing number.
         quotaDeadlines.values.forEach { it.cancel() }; quotaDeadlines.clear(); quotaOutstanding.clear(); quotaRequestIds.clear(); quotaForceRefreshPending.clear()
         quotaByAgent.clear(); quotaLoadingByAgent.clear(); quotaStatusByAgent.clear()
-        quotaResetDeadline?.cancel(); quotaResetRequest = null
-        quotaResetBusy.value = false; quotaResetNeedsRefresh.value = false; quotaResetOutcome.value = null; usageSheetRequested.value = false
+        quotaReset.reset()
+        usageSheetRequested.value = false
         daemonQuotaAgents.value = emptyList() // #348 capability: the next machine re-advertises its own
         connectionDiagnostic?.finish(Outcome.CANCELLED, DiagnosticStage.COMPLETE, ErrorCode.CANCELLED)
         connectionDiagnostic = null; connectionDiagnosticEnded = false
@@ -4056,6 +4058,7 @@ class PocketRepository(
             // chip would name an agent whose numbers are not on screen yet — a mislabeled ratio, which is
             // the exact failure the per-agent label exists to remove.
             is Usage -> { usage.value = f; usageAgent.value = usageRequestedAgent; usageLoading.value = false }
+            is dev.ccpocket.protocol.QuotaResetResult -> quotaReset.onResult(f)
             // The Claude subscription allowance behind the CLI's `/usage` panel. Two different kinds of
             // non-OK reply, deliberately handled differently:
             //  · NO_TOKEN is AUTHORITATIVE — the machine signed out, or authenticates with an API key.
@@ -4065,18 +4068,6 @@ class PocketRepository(
             //    its original fetchedAt (which is what ages the "updated N min ago" line honestly) and
             //    wait for the next trigger. Blanking the bar every time a laptop's wifi blips would make
             //    a persistent indicator useless.
-            is dev.ccpocket.protocol.QuotaResetResult -> {
-                if (f.requestId != quotaResetRequest?.requestId) return
-                quotaResetDeadline?.cancel()
-                quotaResetBusy.value = false
-                quotaResetOutcome.value = f.outcome
-                quotaResetNeedsRefresh.value = true
-                if (f.outcome in setOf("reset", "alreadyRedeemed", "noCredit", "nothingToReset")) {
-                    quotaResetRequest = null
-                    quotaResetStorageKey()?.let(SecureStore::remove)
-                }
-                fetchQuota(AgentKind.CODEX, forceRefresh = true)
-            }
             is ClaudeQuota -> {
                 // ECHO CHECK (issue #348) before anything else: attribute the reading only to the backend
                 // the reply NAMES, and only when we have a request outstanding for it. An older daemon
@@ -4094,11 +4085,7 @@ class PocketRepository(
                 if (f.status == CLAUDE_QUOTA_OK || f.status == CLAUDE_QUOTA_NO_TOKEN) quotaByAgent[agent] = f
                 quotaLoadingByAgent[agent] = false
                 if (agent == AgentKind.CODEX && f.status == CLAUDE_QUOTA_OK && !refreshAgain) {
-                    quotaResetNeedsRefresh.value = false
-                    if (quotaResetRequest == null) {
-                        quotaResetRequest = restoredQuotaReset()
-                        if (quotaResetRequest != null) quotaResetOutcome.value = "unknown"
-                    }
+                    quotaReset.onQuotaRefreshed()
                 }
                 if (refreshAgain) fetchQuota(agent, forceRefresh = true)
                 // one policy drives every agent: open its latch only once nothing is still in flight
@@ -5274,6 +5261,7 @@ class PocketRepository(
     private fun handleDaemonUpdating(conversation: String?, promptId: String?) {
         daemonUpdateRemoteInProgress.value = true
         ensureDaemonUpdatePolling()
+        if (conversation != null && promptId != null) sidePanes.promptRefused(conversation, promptId)
         if (promptId != null && promptId == activePromptId && conversation == convoId.value) {
             promptWatchdog?.cancel(); promptWatchdog = null
             promptPending = false
@@ -5697,37 +5685,36 @@ class PocketRepository(
     //  land silently overwrite the other backend's numbers under whatever label the UI drew last.
     /** System commands are handled locally, including while observing a terminal session. */
     val usageSheetRequested = mutableStateOf(false)
-    val quotaResetBusy = mutableStateOf(false)
-    val quotaResetNeedsRefresh = mutableStateOf(false)
-    val quotaResetOutcome = mutableStateOf<String?>(null)
-    private var quotaResetRequest: dev.ccpocket.protocol.RedeemQuotaReset? = null
-    private var quotaResetDeadline: Job? = null
+    private val quotaReset = QuotaResetController(
+        scope = scope,
+        canSend = { connected.value && !daemonControlsBlocked },
+        availableCount = { quotaByAgent[AgentKind.CODEX]?.resetCredits?.availableCount ?: 0L },
+        newRequestId = { newPromptId() + newPromptId() },
+        restore = {
+            quotaResetStorageKey()?.let(SecureStore::getString)?.let { saved ->
+                runCatching { PocketJson.decodeFromString(dev.ccpocket.protocol.RedeemQuotaReset.serializer(), saved) }.getOrNull()
+            }
+        },
+        persist = { request ->
+            quotaResetStorageKey()?.let { key ->
+                if (request == null) SecureStore.remove(key)
+                else SecureStore.putString(key, PocketJson.encodeToString(dev.ccpocket.protocol.RedeemQuotaReset.serializer(), request))
+            }
+        },
+        send = { send(it) },
+        refreshQuota = { fetchQuota(AgentKind.CODEX, forceRefresh = true) },
+    )
+    val quotaResetBusy: State<Boolean> get() = quotaReset.busy
+    val quotaResetNeedsRefresh: State<Boolean> get() = quotaReset.needsRefresh
+    val quotaResetOutcome: State<String?> get() = quotaReset.outcome
+    val quotaResetPending: Boolean get() = quotaReset.pending
+    val canRedeemQuotaReset: Boolean get() = quotaReset.canRedeem
+    val canRetryQuotaReset: Boolean get() = quotaReset.canRetry
 
     private fun quotaResetStorageKey(): String? = historyCacheIdentity()?.let { "quota-reset-attempt:$it" }
 
-    private fun restoredQuotaReset(): dev.ccpocket.protocol.RedeemQuotaReset? =
-        quotaResetStorageKey()?.let(SecureStore::getString)?.let { saved ->
-            runCatching { PocketJson.decodeFromString(dev.ccpocket.protocol.RedeemQuotaReset.serializer(), saved) }.getOrNull()
-        }
-
-    fun redeemQuotaReset(creditId: String? = null) {
-        val summary = quotaByAgent[AgentKind.CODEX]?.resetCredits ?: return
-        val pending = quotaResetRequest ?: restoredQuotaReset()
-        if (!connected.value || quotaResetBusy.value || (pending == null && (quotaResetNeedsRefresh.value || summary.availableCount <= 0))) return
-        val request = pending ?: dev.ccpocket.protocol.RedeemQuotaReset(newPromptId() + newPromptId(), creditId)
-        // Persist BEFORE dispatch. A process death or manual reconnect must retry the same operation.
-        quotaResetStorageKey()?.let { SecureStore.putString(it, PocketJson.encodeToString(dev.ccpocket.protocol.RedeemQuotaReset.serializer(), request)) }
-        quotaResetRequest = request
-        quotaResetBusy.value = true
-        quotaResetOutcome.value = null
-        quotaResetDeadline?.cancel()
-        quotaResetDeadline = scope.launch {
-            delay(15_000)
-            quotaResetBusy.value = false
-            quotaResetOutcome.value = "unknown"
-        }
-        scope.launch { send(request) }
-    }
+    fun redeemQuotaReset(creditId: String? = null): Boolean = quotaReset.redeem(creditId)
+    fun retryQuotaReset(): Boolean = quotaReset.retry()
 
     /** The latest reading per backend. Absent = we have not been told: the fetch is still in flight, this
      *  daemon predates the frame and silently dropped the request, or (for a non-Claude agent) we never
@@ -7134,14 +7121,16 @@ class PocketRepository(
         return sendPrompt(prompt, includeAttachments = false)
     }
 
+    private fun handleLocalSystemCommand(agent: AgentKind?, text: String): Boolean {
+        if (agent == null || text.trim() != "/usage" || agent !in setOf(AgentKind.CLAUDE, AgentKind.CODEX)) return false
+        usageSheetRequested.value = true
+        fetchQuota(agent, forceRefresh = true)
+        return true
+    }
+
     @OptIn(ExperimentalEncodingApi::class)
     private fun sendPrompt(text: String, includeAttachments: Boolean): Boolean {
-        val commandAgent = sessionAgent.value
-        if (text.trim() == "/usage" && commandAgent != null && commandAgent in setOf(AgentKind.CLAUDE, AgentKind.CODEX)) {
-            usageSheetRequested.value = true
-            fetchQuota(commandAgent, forceRefresh = true)
-            return true
-        }
+        if (handleLocalSystemCommand(sessionAgent.value, text)) return true
         if (daemonControlsBlocked) return false
         memoHost.onManualSend() // a message of the user's own pauses whatever a memo batch had left to send
         // about to start work whose completion is exactly what a push would announce — a cheap, honest
@@ -8561,7 +8550,6 @@ class PocketRepository(
         constraints: List<String>? = null,
         ask: PermissionAsk? = null,
     ) {
-        if (daemonControlsBlocked) return
         if (!isCurrentAsk(ask)) return
         val a = pendingAsk.value ?: return
         convoId.value ?: return
@@ -8673,7 +8661,6 @@ class PocketRepository(
         constraints: List<String>? = null,
         message: String? = null,             // the note that rides a question SKIP (#57)
     ) {
-        if (daemonControlsBlocked) return
         val key = ApprovalKey(ask.convoId, ask.askId)
         if (pendingApprovals.remove(key) != null) {
             if (pendingAsk.value?.let { ApprovalKey(it.convoId, it.askId) } == key) {
@@ -8713,7 +8700,6 @@ class PocketRepository(
     /** Answer an AskUserQuestion prompt: the picks (question text → label/comma-joined labels/"Other…" text)
      *  and/or a freeform [response] ride the ALLOW verdict; the daemon merges them into claude's updatedInput. */
     fun answerQuestions(answers: Map<String, String>?, response: String? = null, ask: PermissionAsk? = null) {
-        if (daemonControlsBlocked) return
         if (!isCurrentAsk(ask)) return // a stale answer must not land on the next queued ask (see [resolve])
         val a = pendingAsk.value ?: return
         convoId.value ?: return
@@ -8736,7 +8722,6 @@ class PocketRepository(
      * focused path, never a parallel one.
      */
     fun answerQuestionsDirect(ask: PermissionAsk, answers: Map<String, String>?, response: String? = null) {
-        if (daemonControlsBlocked) return
         // the note lands in the column that showed the card, and that column's queue advances — both live
         // in SidePanes so there is exactly one place a pane's card is retired
         sidePanes.noteQuestionsAnswered(ask.convoId, ask.askId, answeredItems(ask, answers, response))

@@ -21,4 +21,14 @@ class DaemonUpdateWireTest {
             assertEquals(envelope, PocketJson.decodeFromString<Envelope>(PocketJson.encodeToString(envelope)))
         }
     }
+
+    @Test fun update_gate_blocks_new_work_but_allows_existing_work_to_finish() {
+        for (frame in listOf<Frame>(
+            PermissionVerdict("chat", "permission", Decision.ALLOW),
+            PermissionVerdict("chat", "question", Decision.ALLOW, answers = mapOf("Continue?" to "Yes")),
+            CancelTurn("chat"), StopBackgroundJob("chat", "job"),
+        )) assertTrue(DaemonUpdateAccess.allowed(frame), "existing work must be able to settle: $frame")
+        assertFalse(DaemonUpdateAccess.allowed(SendPrompt("chat", "new task")))
+        assertFalse(DaemonUpdateAccess.allowed(OpenSession("/work")))
+    }
 }

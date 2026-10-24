@@ -50,7 +50,7 @@ class DaemonUpdateRequestTest {
             assertEquals("updated", repo.daemonUpdateStatus.value?.state)
         } finally { scope.cancel() }
     }
-    @Test fun updating_pauses_messages_and_control_frames_but_keeps_reading_and_recovers_on_failure() = runBlocking {
+    @Test fun updating_pauses_new_messages_but_keeps_task_completion_and_recovers_on_failure() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         try {
             val sent = mutableListOf<Frame>()
@@ -67,12 +67,13 @@ class DaemonUpdateRequestTest {
             assertEquals(before, repo.messages.size, "a blocked message must not create a sent bubble")
             repo.cancelTurn()
             repo.fetchPresets()
-            assertTrue(sent.none { it is SendPrompt || it is CancelTurn })
+            assertTrue(sent.none { it is SendPrompt })
+            assertTrue(sent.any { it is CancelTurn }, "existing work must remain stoppable while the updater waits for idle")
             assertTrue(sent.any { it is FetchPresets }, "viewing must remain available")
             repo.receiveForTest(DaemonUpdateStatus(request.requestId, "failed", controlsBlocked = false))
             assertFalse(repo.daemonControlsBlocked)
-            repo.cancelTurn()
-            assertTrue(sent.any { it is CancelTurn }, "controls resume after a definitive failure")
+            assertTrue(repo.sendPrompt("allowed after update failure"))
+            assertTrue(sent.filterIsInstance<SendPrompt>().any { it.text == "allowed after update failure" })
         } finally { scope.cancel() }
     }
 

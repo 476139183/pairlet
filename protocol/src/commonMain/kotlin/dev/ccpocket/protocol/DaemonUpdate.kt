@@ -23,7 +23,7 @@ data class DaemonUpdateStatus(
     val controlsBlocked: Boolean = false,
 ) : ToPhone
 
-/** Shared boundary: viewing existing data and maintaining the connection remain possible during install. */
+/** Pause new work during install; existing work must still be able to finish or be stopped. */
 object DaemonUpdateAccess {
     fun allowed(frame: Frame): Boolean = frame !is ToDaemon || when (frame) {
         is ClientCaps, is ListDirectories, is ListSessions, is ListArchivedSessions,
@@ -31,6 +31,9 @@ object DaemonUpdateAccess {
         is FetchImage, is ListSessionFiles, is ReadFile, is ReadFileDiff, is ListPathEntries,
         is FetchAuthStatus, is FetchPresets, is FetchUsage, is ListPendingApprovals,
         is DaemonUpdateGet, is DaemonUpdateStart -> true
+        // Background/scheduled work can start while a download is in flight. Refusing its answers
+        // would keep both the task and an updater waiting for idle until the ask times out.
+        is PermissionVerdict, is CancelTurn, is StopBackgroundJob -> true
         is OpenSession -> frame.observeOnly
         else -> false
     }

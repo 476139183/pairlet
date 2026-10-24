@@ -2343,5 +2343,5 @@
     <string name="quota_unavailable">Account usage is unavailable. Try refreshing.</string>
     <string name="quota_reset_expires">Expires: %1$s</string>
     <string name="quota_reset_retry">Check reset result again</string>
-    <string name="updates_daemon_controls_paused">The computer daemon is updating. Sending messages and control actions are paused. You can still read chat history. Controls resume when the update finishes and the connection returns.</string>
+    <string name="updates_daemon_controls_paused">The computer daemon is updating. New messages and sessions are paused. You can still read history, answer existing approvals or questions, and stop running tasks.</string>
 </resources>

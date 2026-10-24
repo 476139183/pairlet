@@ -4,9 +4,31 @@ import dev.ccpocket.protocol.DaemonUpdateStatus
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlin.test.*
 
 class DaemonUpdateControllerTest {
+    @Test fun work_started_during_download_can_answer_its_ask_and_release_the_update() = runBlocking {
+        var awaitingApproval = false
+        var restarted = false
+        val states = mutableListOf<String>()
+        val verdict = dev.ccpocket.protocol.PermissionVerdict("scheduled-chat", "ask", dev.ccpocket.protocol.Decision.ALLOW)
+        val controller = DaemonUpdateController(
+            mode = { "remote" }, isBusy = { awaitingApproval },
+            prepare = { DaemonUpdateController.PreparedUpdate("2.7.0") { awaitingApproval = true } },
+            pause = {
+                assertTrue(dev.ccpocket.protocol.DaemonUpdateAccess.allowed(verdict))
+                assertFalse(dev.ccpocket.protocol.DaemonUpdateAccess.allowed(dev.ccpocket.protocol.SendPrompt("scheduled-chat", "new task")))
+                awaitingApproval = false // the existing task receives its owner's answer and completes
+            },
+            restart = { assertFalse(awaitingApproval); restarted = true },
+        )
+        withTimeout(1_000) { controller.request("attempt") { states += it.state } }
+        assertEquals(listOf("checking", "downloading", "waiting", "restarting"), states)
+        assertTrue(restarted)
+        assertFalse(UpdateState.controlsBlocked)
+    }
+
     @Test fun unsupported_installs_never_download_or_restart() = runBlocking {
         val states = mutableListOf<String>()
         val controller = DaemonUpdateController(
