@@ -33,7 +33,7 @@ object DaemonUpdateAccess {
         is DaemonUpdateGet, is DaemonUpdateStart -> true
         // Background/scheduled work can start while a download is in flight. Refusing its answers
         // would keep both the task and an updater waiting for idle until the ask times out.
-        is PermissionVerdict, is CancelTurn, is StopBackgroundJob -> true
+        is PermissionVerdict, is ApprovalAttentionHeartbeat, is CancelTurn, is StopBackgroundJob -> true
         is OpenSession -> frame.observeOnly
         else -> false
     }

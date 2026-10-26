@@ -26,6 +26,8 @@ class DaemonUpdateWireTest {
         for (frame in listOf<Frame>(
             PermissionVerdict("chat", "permission", Decision.ALLOW),
             PermissionVerdict("chat", "question", Decision.ALLOW, answers = mapOf("Continue?" to "Yes")),
+            ApprovalAttentionHeartbeat("chat", "permission", true),
+            ApprovalAttentionHeartbeat("chat", "permission", false),
             CancelTurn("chat"), StopBackgroundJob("chat", "job"),
         )) assertTrue(DaemonUpdateAccess.allowed(frame), "existing work must be able to settle: $frame")
         assertFalse(DaemonUpdateAccess.allowed(SendPrompt("chat", "new task")))

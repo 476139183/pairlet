@@ -130,6 +130,7 @@ class SidePane(
      *  actually sent one. Most TurnDone frames (a reattached turn, work started at the computer) have none,
      *  and scanning the whole transcript for a bubble that cannot be there is pure waste on every turn. */
     internal var promptOutstanding = false
+    internal var promptRefusedByUpdate = false
 
     /** The mode this column was opened under, replayed verbatim by a retry or a reconnect re-attach. */
     internal var mode: PermissionMode = PermissionMode.DEFAULT
@@ -510,8 +511,8 @@ class SidePanes(
                 // deliver to (issue #329). The prompt-layer fresh-resend a SessionGone triggers on the focused
                 // path is deliberately NOT mirrored: reopenAll() already re-opens columns on the link's return.
                 cancelWatchdogs(it)
-                it.sendStalled.value = false
-                it.turnStalled.value = false
+                it.sendStalled.value = it.promptRefusedByUpdate
+                it.turnStalled.value = it.promptRefusedByUpdate
                 it.turnQueued.value = false
                 it.awaitingTurn = false
                 // no verdict can be delivered to a conversation that no longer exists, so nothing may keep
@@ -623,6 +624,7 @@ class SidePanes(
         pane.turnQueued.value = false
         pane.messages.add(ChatItem.User(text, pending = true, promptId = promptId))
         pane.promptOutstanding = true // there is now a bubble for the next turn boundary to settle
+        pane.promptRefusedByUpdate = false
         pane.activePromptId = promptId
         pane.promptRetryText = text // #329 resend payload — text only (a column's send carries no images)
         pane.turnStartMark = TimeSource.Monotonic.markNow()
@@ -639,8 +641,9 @@ class SidePanes(
         if (pane.activePromptId != promptId) return false
         cancelWatchdogs(pane)
         pane.promptOutstanding = false
+        pane.promptRefusedByUpdate = true
         pane.awaitingTurn = false
-        pane.streaming.value = false
+        pane.streaming.value = pane.promptQueued // the previous task may still be running
         pane.turnQueued.value = false
         pane.sendStalled.value = true
         pane.turnStalled.value = true
@@ -679,6 +682,7 @@ class SidePanes(
      * and a receipt for an older queued send must never move the newest prompt's watchdog.
      */
     private fun promptDelivered(pane: SidePane, promptId: String) {
+        if (pane.promptRefusedByUpdate) return
         if (pane.activePromptId != promptId || !pane.promptOutstanding) return
         pane.promptWatchdog?.cancel(); pane.promptWatchdog = null // receipt arrived — the delivery deadline is moot
         pane.sendStalled.value = false
@@ -724,6 +728,7 @@ class SidePanes(
      * is intentionally NOT flipped here (unlike the focused path): [endTurn] and [promptDelivered] own that.
      */
     private fun promptEvidence(pane: SidePane) {
+        if (pane.promptRefusedByUpdate) return // older task output cannot consume the refused send's retry
         cancelWatchdogs(pane)
         pane.awaitingTurn = false
         pane.sendStalled.value = false
@@ -768,6 +773,7 @@ class SidePanes(
         pane.promptRetryText = text
         pane.promptQueued = false // the stalled turn never started — the re-driven copy expects the strict deadline
         pane.promptOutstanding = true
+        pane.promptRefusedByUpdate = false
         pane.streaming.value = true
         scope.launch { send(SendPrompt(convo, text, promptId = freshId)) }
         armReceiptWatchdog(pane, freshId)

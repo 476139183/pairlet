@@ -1802,7 +1802,10 @@ class PocketRepository(
      *  session and resend this once — the fix for "sent a message into a ghost session, nothing happened".
      *  Cleared on the first sign of processing; consumed (single retry, no loops) by the resend.
      *  [promptId] rides along so the resend reuses it — the daemon dedupes if the original landed (#66). */
-    private class PromptRetry(val text: String, val images: List<ImageData>, val workdir: String, val promptId: String?)
+    private class PromptRetry(
+        val text: String, val images: List<ImageData>, val workdir: String, val promptId: String?,
+        val refusedByUpdate: Boolean = false,
+    )
     private var promptRetry: PromptRetry? = null
     private var promptResendArmed = false // set by SessionGone: the next matching SessionLive resends promptRetry
     private var promptPending = false // a User bubble is marked pending until the daemon shows signs of life
@@ -1884,6 +1887,8 @@ class PocketRepository(
      *  [exactPrompt] is reserved for evidence that names/resolves this prompt itself (currently a matching
      *  ConvoHistory USER row) and for terminal teardown where no delivery claim remains on screen. */
     private fun promptEvidence(exactPrompt: Boolean = false) {
+        // Output from work admitted BEFORE the update cannot acknowledge a refused prompt.
+        if (promptRetry?.refusedByUpdate == true && !exactPrompt) return
         clearTurnWatchdogState() // any real frame retires a silence-only turn inference
         if (promptPending && promptQueued && !exactPrompt) return
 
@@ -4283,7 +4288,7 @@ class PocketRepository(
                 // #362: this connection's advertisement is the only thing that starts pin sync with this computer
                 pinLink.onDaemonInfo(f.supportsProjectPins, paired.value, pairedTransport = useRelay && !demoMode.value, outbound = capturePinOutbound())
                 memoHost.onDaemonInfo(f) // voice memo: this connection's advertisement, and the connection itself
-                if (daemonOwnsPromptRecovery) clearTurnWatchdogState()
+                if (daemonOwnsPromptRecovery && promptRetry?.refusedByUpdate != true) clearTurnWatchdogState()
                 // version visibility (issue #200): unconditional, incl. nulls from a daemon that predates
                 // the fields — "unknown" must not be shown as the previous machine's numbers
                 versionStatus.value = VersionStatus(
@@ -4328,7 +4333,7 @@ class PocketRepository(
                 // Reattach is an authoritative lifecycle snapshot. A local 45s deadline may have fired while
                 // the phone was suspended and missed both output + TurnDone; never carry that stale inference
                 // over the daemon's fresh executing/idle truth (the screenshot bug).
-                if (f.executing != null) clearTurnWatchdogState()
+                if (f.executing != null && promptRetry?.refusedByUpdate != true) clearTurnWatchdogState()
                 openJob?.cancel(); openJob = null // the answer owns the view; retire its dormant 8s deadline
                 pendingNewOpenWd = null // the in-flight open (if any) is answered by this announce
                 openInFlight = null // …and so is its #235 claim — the next click on this row is a real request again
@@ -4430,7 +4435,7 @@ class PocketRepository(
                 sessionDegraded.value = f.degraded
                 if (!f.degraded) degradedSendArmed = false
                 val retry = promptRetry
-                if (promptResendArmed && retry != null && !f.observing && f.workdir == retry.workdir) {
+                if (promptResendArmed && retry != null && !retry.refusedByUpdate && !f.observing && f.workdir == retry.workdir) {
                     promptRetry = null; promptResendArmed = false
                     activePromptId = retry.promptId
                     promptPending = true
@@ -4672,7 +4677,7 @@ class PocketRepository(
                 messages.add(ChatItem.Sys(f.message)) // UI prepends the localized "error:" prefix
                 // a dead claude process never sends TurnDone — clear the streaming state here
                 if (f.code == "process_exited" && (f.convoId == null || f.convoId == convoId.value)) {
-                    promptEvidence(exactPrompt = true)
+                    if (promptRetry?.refusedByUpdate != true) promptEvidence(exactPrompt = true)
                     finishThinking(); streaming.value = false
                     noteCurrentSettledSeen(sessionKey.value ?: currentSessionId)
                 }
@@ -4701,7 +4706,10 @@ class PocketRepository(
             // Recover instead of spinning: re-open (resume) the same session, and the SessionLive handler
             // resends the pending prompt exactly once. No session to resume → surface it honestly.
             is SessionGone -> if (f.convoId == convoId.value) {
-                if (observing.value) {
+                if (promptRetry?.refusedByUpdate == true) {
+                    // An update refusal requires an explicit retry, including after the old process dies.
+                    finishThinking(); streaming.value = false
+                } else if (observing.value) {
                     // an observe view can't run turns — a stray send must not leave the caret spinning
                     // forever (the old blanket ignore did exactly that, issue #45 ②)
                     promptEvidence(exactPrompt = true); finishThinking(); streaming.value = false
@@ -5230,7 +5238,7 @@ class PocketRepository(
 
     fun startDaemonUpdate(): Boolean {
         if (!canUpdateDaemon() || daemonControlsBlocked) return false
-        val target = paired.value ?: return false
+        val targetIdentity = historyCacheIdentity() ?: return false
         val requestId = newPromptId()
         daemonUpdateRequestId = requestId
         daemonUpdateInitialVersion = versionStatus.value.daemonVersion
@@ -5244,7 +5252,7 @@ class PocketRepository(
         daemonUpdateStartJob = scope.launch {
             // The repository scope survives a machine switch. Never let a deferred owner action
             // cross onto another binding, even if the caller replaced it without disconnecting.
-            if (paired.value == target && daemonUpdateRequestId == requestId) {
+            if (canUpdateDaemon() && historyCacheIdentity() == targetIdentity && daemonUpdateRequestId == requestId) {
                 send(dev.ccpocket.protocol.DaemonUpdateStart(requestId))
             }
         }
@@ -5272,10 +5280,13 @@ class PocketRepository(
         ensureDaemonUpdatePolling()
         if (conversation != null && promptId != null) sidePanes.promptRefused(conversation, promptId)
         if (promptId != null && promptId == activePromptId && conversation == convoId.value) {
+            val olderTurnRunning = promptQueued
             promptWatchdog?.cancel(); promptWatchdog = null
             promptPending = false
+            promptRetry = promptRetry?.let { PromptRetry(it.text, it.images, it.workdir, it.promptId, refusedByUpdate = true) }
+            promptResendArmed = false
             sendStalled.value = true
-            streaming.value = false
+            streaming.value = olderTurnRunning
             clearTurnWatchdogState()
             turnStalled.value = true // show the existing explicit resend affordance; never auto-replay
         }
