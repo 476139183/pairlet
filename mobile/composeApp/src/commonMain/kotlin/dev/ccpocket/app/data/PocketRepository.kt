@@ -3195,6 +3195,7 @@ class PocketRepository(
         daemonTranscriptRefineAgentsState.value = emptyList() // voice input v2: the next machine re-advertises its refiners
         versionStatus.value = VersionStatus(APP_VERSION) // ditto (issue #200): the next machine reports its own
         daemonUpdateMode.value = null
+        daemonUpdateStartJob?.cancel(); daemonUpdateStartJob = null
         daemonUpdateDeadline?.cancel(); daemonUpdateDeadline = null
         daemonUpdateRequestId = null; daemonUpdateInitialVersion = null; daemonUpdateStatus.value = null
         daemonUpdateRemoteInProgress.value = false
@@ -5216,6 +5217,7 @@ class PocketRepository(
     val daemonUpdateStatus = mutableStateOf<dev.ccpocket.protocol.DaemonUpdateStatus?>(null)
     private var daemonUpdateRequestId: String? = null
     private var daemonUpdateInitialVersion: String? = null
+    private var daemonUpdateStartJob: Job? = null
     private var daemonUpdateDeadline: Job? = null
     private var daemonUpdatePoll: Job? = null
     private val daemonUpdateRemoteInProgress = mutableStateOf(false)
@@ -5228,6 +5230,7 @@ class PocketRepository(
 
     fun startDaemonUpdate(): Boolean {
         if (!canUpdateDaemon() || daemonControlsBlocked) return false
+        val target = paired.value ?: return false
         val requestId = newPromptId()
         daemonUpdateRequestId = requestId
         daemonUpdateInitialVersion = versionStatus.value.daemonVersion
@@ -5238,7 +5241,13 @@ class PocketRepository(
             delay(12_000)
             if (daemonUpdateRequestId == requestId) daemonUpdateStatus.value = daemonUpdateStatus.value?.copy(state = "unknown")
         }
-        scope.launch { send(dev.ccpocket.protocol.DaemonUpdateStart(requestId)) }
+        daemonUpdateStartJob = scope.launch {
+            // The repository scope survives a machine switch. Never let a deferred owner action
+            // cross onto another binding, even if the caller replaced it without disconnecting.
+            if (paired.value == target && daemonUpdateRequestId == requestId) {
+                send(dev.ccpocket.protocol.DaemonUpdateStart(requestId))
+            }
+        }
         ensureDaemonUpdatePolling()
         return true
     }

@@ -4,10 +4,61 @@ import dev.ccpocket.app.pairing.BindingRole
 import dev.ccpocket.app.pairing.PairedDaemon
 import dev.ccpocket.protocol.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
 import kotlin.test.*
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class DaemonUpdateRequestTest {
     private val binding = PairedDaemon("wss://test", "update-test", "pk", "device", "credential")
+
+    @Test fun disconnect_cancels_an_update_before_dispatch_to_another_computer() = runTest {
+        val sent = mutableListOf<Pair<String?, Frame>>()
+        val repo = PocketRepository(backgroundScope)
+        repo.onSendForTest = { sent += repo.paired.value?.accountId to it }
+        repo.paired.value = binding
+        repo.connected.value = true
+        repo.daemonUpdateMode.value = "remote"
+        assertTrue(repo.startDaemonUpdate())
+        repo.disconnect()
+        val other = binding.copy(accountId = "other-computer")
+        repo.paired.value = other
+        repo.connected.value = true
+        repo.daemonUpdateMode.value = "remote"
+        runCurrent()
+        assertTrue(sent.none { it.second is DaemonUpdateStart || it.second is DaemonUpdateGet })
+        assertFalse(repo.daemonControlsBlocked)
+        assertTrue(repo.startDaemonUpdate())
+        runCurrent()
+        assertEquals(listOf(other.accountId), sent.filter { it.second is DaemonUpdateStart }.map { it.first })
+    }
+
+    @Test fun deferred_update_checks_binding_identity_even_if_the_binding_changes_without_disconnect() = runTest {
+        val sent = mutableListOf<Frame>()
+        val repo = PocketRepository(backgroundScope)
+        repo.onSendForTest = { sent += it }
+        repo.paired.value = binding
+        repo.connected.value = true
+        repo.daemonUpdateMode.value = "remote"
+        assertTrue(repo.startDaemonUpdate())
+        repo.paired.value = binding.copy(accountId = "other-computer")
+        runCurrent()
+        assertTrue(sent.none { it is DaemonUpdateStart })
+    }
+
+    @Test fun an_update_queued_for_the_same_binding_is_sent_once() = runTest {
+        val sent = mutableListOf<Frame>()
+        val repo = PocketRepository(backgroundScope)
+        repo.onSendForTest = { sent += it }
+        repo.paired.value = binding
+        repo.connected.value = true
+        repo.daemonUpdateMode.value = "remote"
+        assertTrue(repo.startDaemonUpdate())
+        assertTrue(sent.none { it is DaemonUpdateStart })
+        runCurrent()
+        assertEquals(1, sent.filterIsInstance<DaemonUpdateStart>().size)
+        assertFalse(repo.startDaemonUpdate())
+    }
 
     @Test fun old_daemons_and_non_owners_never_receive_update_requests() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)

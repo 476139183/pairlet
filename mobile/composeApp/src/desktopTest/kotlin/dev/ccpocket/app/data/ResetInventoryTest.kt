@@ -758,6 +758,7 @@ class ResetInventoryTest {
             daemonUpdateStatus           R R K K K K K K
             daemonUpdateRequestId        R R K K K K K K
             daemonUpdateInitialVersion   R R K K K K K K
+            daemonUpdateStartJob         R R K K K K K K
             daemonUpdateDeadline         R R K K K K K K
             daemonUpdatePoll             R R K K K K K K
             daemonUpdateRemoteInProgress - - - - - - - -
